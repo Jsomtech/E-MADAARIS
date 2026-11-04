@@ -22,6 +22,8 @@ import {
 } from './api/flows/extras.js';
 import { studentAdminRouter } from './api/flows/studentsAdmin.js';
 import { classAdminRouter } from './api/flows/classesAdmin.js';
+import { transfersRouter } from './api/flows/transfers.js';
+import { lessonsRouter } from './api/flows/lessons.js';
 import { accountRouter } from './api/push.routes.js';
 
 const V1 = '/api/v1';
@@ -63,6 +65,8 @@ export function createApp() {
   gated.use('/school/trash', trashRouter);
   gated.use('/school/students', studentAdminRouter);
   gated.use('/school/classes', classAdminRouter);
+  gated.use('/school/transfers', transfersRouter);
+  gated.use('/school/lessons', lessonsRouter);
   gated.use('/school/notifications', notificationsRouter);
   gated.use('/school/support', supportRouter);
   gated.use('/school/certificates', certificateRouter);

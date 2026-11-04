@@ -50,6 +50,7 @@ const STATUS_TONE = {
   pending: 'warn', pending_approval: 'warn', pending_verification: 'warn', draft: 'neutral',
   partial: 'warn', partially_paid: 'warn', in_progress: 'info', scheduled: 'info', trial: 'info',
   processing: 'info', waiting_for_school: 'warn', open: 'info', unassigned: 'warn',
+  requested: 'warn', completed: 'ok',
   suspended: 'danger', expired: 'danger', rejected: 'danger', failed: 'danger', inactive: 'danger',
   withdrawn: 'danger', blocked: 'danger', cancelled: 'danger', overdue: 'danger', deleted: 'danger',
   unpaid: 'danger', absent: 'danger', void: 'danger', lost: 'danger',

@@ -3,7 +3,7 @@ import {
   ClipboardList, FileCheck2, PenSquare, Award, Wallet, ReceiptText, TrendingDown, Library,
   ShieldAlert, Bus, FlaskConical, DoorOpen, Bell, Settings, CreditCard, Headphones, Activity,
   BarChart3, Building2, FileStack, UserCog, Megaphone, Home, Star, ClipboardSignature, BadgeCheck,
-  Trash2, DatabaseBackup, Palette,
+  Trash2, DatabaseBackup, Palette, ArrowRightLeft,
 } from 'lucide-react';
 
 export const ICONS = {
@@ -16,7 +16,7 @@ export const ICONS = {
   audit: Activity, analytics: BarChart3, schools: Building2, plans: FileStack,
   roles: UserCog, announcements: Megaphone, home: Home, admissions: Star,
   exams: ClipboardSignature, usersCog: UserCog, idCards: BadgeCheck,
-  trash: Trash2, backups: DatabaseBackup, content: Palette,
+  trash: Trash2, backups: DatabaseBackup, content: Palette, transfers: ArrowRightLeft,
 };
 
 const m = (key, perm, icon) => ({ key, to: `/m/${key}`, perm, icon });
@@ -42,6 +42,7 @@ export const ROLE_CONFIG = {
         custom('analytics', '/platform/analytics', 'platform.analytics.view', 'analytics'),
         custom('tickets', '/platform/tickets', 'platform.tickets.manage', 'support'),
         custom('content', '/platform/content', 'platform.dashboard.view', 'content'),
+        custom('transfers', '/platform/transfers', 'platform.schools.view', 'transfers'),
         custom('backups', '/platform/backups', 'platform.dashboard.view', 'backups'),
         custom('trash', '/platform/trash', 'platform.audit.view', 'trash'),
         custom('audit', '/platform/audit', 'platform.audit.view', 'audit'),
@@ -70,6 +71,7 @@ export const ROLE_CONFIG = {
       { title: 'nav.people', items: [
         custom('users', '/school/users', 'users.view', 'users'),
         custom('admissions', '/school/admissions', 'admissions.view', 'admissions'),
+        custom('transfers', '/school/transfers', 'students.view', 'transfers'),
         m('students', 'students.view', 'students'),
         custom('id-cards', '/school/id-cards', 'students.view', 'idCards'),
         m('guardians', 'guardians.view', 'guardians'),

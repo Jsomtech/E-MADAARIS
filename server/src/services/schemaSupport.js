@@ -35,3 +35,21 @@ export async function classesExtraColumns() {
   }
   return true;
 }
+
+/**
+ * Migration 0020 adds learning_materials.link_url (Google Drive video links) and the
+ * student_transfers table. The lessons UI probes this so it can prompt for the migration
+ * instead of failing every video save with PGRST204.
+ */
+let lessonLink = null;
+
+export async function learningMaterialLinkColumn() {
+  if (lessonLink !== null) return lessonLink;
+  const { error } = await requireDb().from('learning_materials').select('id, link_url').limit(1);
+  if (!error) { lessonLink = true; return true; }
+  if (/could not find|does not exist|schema cache|unknown column/i.test(error.message || '')) {
+    lessonLink = false;
+    return false;
+  }
+  return true;
+}

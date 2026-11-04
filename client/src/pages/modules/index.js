@@ -12,6 +12,7 @@ import FinanceSummaryPage from './FinanceSummaryPage.jsx';
 import ClearancesPage from './ClearancesPage.jsx';
 import LibraryLoansPage from './LibraryLoansPage.jsx';
 import ClassManagementPage from './ClassManagementPage.jsx';
+import LessonsPage from './LessonsPage.jsx';
 
 export const SPECIAL_MODULES = {
   classes: ClassManagementPage,
@@ -24,4 +25,5 @@ export const SPECIAL_MODULES = {
   'finance-summary': FinanceSummaryPage,
   clearances: ClearancesPage,
   'library-loans': LibraryLoansPage,
+  'learning-materials': LessonsPage,
 };

@@ -15,6 +15,7 @@ import {
   SITE_CONTENT_PAGES, isSiteContentKey,
   readSiteContent, writeSiteContent, clearSiteContent, assertSiteContent,
 } from '../services/siteContent.js';
+import { listAll as listAllTransfers, getTransfer } from '../services/transfers.js';
 
 export const platformRouter = Router();
 platformRouter.use(requirePlatform());
@@ -174,6 +175,20 @@ platformRouter.get('/schools/:id', async (req, res, next) => {
     const administrators = (admins || []).map((a) => a.school_users).filter(Boolean);
     res.json({ data: { ...school, subscriptions: subs || [], settings, administrators, usage } });
   } catch (e) { next(e); }
+});
+
+// ── Cross-school student transfers (Super Admin oversight) ───────
+platformRouter.get('/transfers', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Number(req.query.pageSize) || 50);
+    const status = req.query.status ? String(req.query.status) : null;
+    res.json(await listAllTransfers(req, { status, page, pageSize }));
+  } catch (e) { next(e); }
+});
+
+platformRouter.get('/transfers/:id', requireSuperAdmin, async (req, res, next) => {
+  try { res.json({ data: await getTransfer(req, req.params.id) }); } catch (e) { next(e); }
 });
 
 async function systemRoleId(schoolId, name) {

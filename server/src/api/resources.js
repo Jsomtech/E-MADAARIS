@@ -334,18 +334,37 @@ export function mountResources(api) {
   });
 
   // ── Digital learning ─────────────────────────────────────────
+  // A video lesson is never uploaded: the teacher hosts it on Google Drive and pastes the share
+  // link, so `material_type: 'video'` requires a drive.google.com/docs.google.com `link_url` and
+  // must not carry an uploaded file. Documents/slides may attach a file, a link, or both.
+  const DRIVE_LINK = /^https:\/\/(drive|docs)\.google\.com\/\S+/i;
+  const assertLessonShape = (payload) => {
+    if (payload.link_url !== undefined && payload.link_url !== null && payload.link_url !== '') {
+      if (!DRIVE_LINK.test(String(payload.link_url))) {
+        throw new ApiError(400, 'A video link must be a Google Drive share URL (https://drive.google.com/… or https://docs.google.com/…). Upload the video to Drive first, then paste its share link.');
+      }
+    }
+    if (payload.material_type === 'video') {
+      if (!payload.link_url) throw new ApiError(400, 'A video lesson needs a Google Drive share link.');
+      if (payload.file_path) throw new ApiError(400, 'Videos are shared as a Google Drive link, not uploaded as a file.');
+    }
+    return payload;
+  };
   R('learning-materials', {
     table: 'learning_materials', perm: 'learning', feature: 'digital.learning',
     search: ['title'], filter: ['class_id', 'subject_id', 'material_type'],
     select: '*, classes(name), subjects(name)',
-    fields: ['class_id', 'subject_id', 'title', 'description', 'material_type', 'file_path', 'file_name', 'size_bytes', 'is_published'],
+    fields: ['class_id', 'subject_id', 'title', 'description', 'material_type', 'file_path', 'file_name', 'size_bytes', 'link_url', 'is_published'],
     schema: z.object({
       class_id: optionalId, subject_id: optionalId, title: s(200), description: trimStr(2000).optional(),
       material_type: z.enum(['document', 'presentation', 'video', 'note']).optional(),
       file_path: z.string().optional(), file_name: trimStr(255).optional(),
-      size_bytes: z.coerce.number().int().optional(), is_published: z.boolean().optional(),
+      size_bytes: z.coerce.number().int().optional(),
+      link_url: z.string().trim().max(2000).optional(),
+      is_published: z.boolean().optional(),
     }),
-    beforeCreate: async (p, req) => { p.teacher_id = req.auth.userId; return p; },
+    beforeCreate: async (p, req) => { assertLessonShape(p); p.teacher_id = req.auth.userId; return p; },
+    beforeUpdate: async (p) => assertLessonShape(p),
     refs: { class_id: 'classes', subject_id: 'subjects' },
     modifyQuery: (q, req) => (isPortalOnly(req.auth) ? q.eq('is_published', true) : q),
     ownFilter: (req) => portalClassFilter(req.auth),
