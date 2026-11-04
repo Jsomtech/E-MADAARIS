@@ -1,0 +1,21 @@
+{
+  "name": "e-madaaris",
+  "version": "3.0.0",
+  "private": true,
+  "description": "E-MADAARIS — Smart School Management & Digital Learning SaaS Platform (JSOM TECH)",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server",
+    "db:seed": "npm run db:seed -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

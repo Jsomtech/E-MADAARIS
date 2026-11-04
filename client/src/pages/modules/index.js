@@ -1,0 +1,27 @@
+/**
+ * Flow pages that need more than generic CRUD. Anything not listed here falls back
+ * to the config-driven EntityPage in ../ModulePage.jsx.
+ */
+import AttendancePage from './AttendancePage.jsx';
+import MarksPage from './MarksPage.jsx';
+import ResultsPage from './ResultsPage.jsx';
+import ReportCardPage from './ReportCardPage.jsx';
+import ExaminationsPage from './ExaminationsPage.jsx';
+import FinancePaymentsPage from './FinancePaymentsPage.jsx';
+import FinanceSummaryPage from './FinanceSummaryPage.jsx';
+import ClearancesPage from './ClearancesPage.jsx';
+import LibraryLoansPage from './LibraryLoansPage.jsx';
+import ClassManagementPage from './ClassManagementPage.jsx';
+
+export const SPECIAL_MODULES = {
+  classes: ClassManagementPage,
+  attendance: AttendancePage,
+  marks: MarksPage,
+  results: ResultsPage,
+  'report-card': ReportCardPage,
+  examinations: ExaminationsPage,
+  'finance-payments': FinancePaymentsPage,
+  'finance-summary': FinanceSummaryPage,
+  clearances: ClearancesPage,
+  'library-loans': LibraryLoansPage,
+};

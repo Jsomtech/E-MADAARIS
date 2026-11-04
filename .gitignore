@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+client/dist/
+
+# Real environment secrets — only .env.example files are committed
+.env
+.env.*
+client/.env
+client/.env.*
+!.env.example
+!client/.env.example
+
+# Runtime logs
+*.log
+server.err
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
