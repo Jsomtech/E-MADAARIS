@@ -11,7 +11,7 @@ declare
     'school','users','roles','students','admissions','teachers','staff','guardians',
     'attendance','timetable','examinations','marks','results','finance','learning',
     'announcements','reports','certificates','library','discipline','transport',
-    'hr','reception','lab','subscription','support','audit','notifications'
+    'hr','reception','lab','subscription','support','audit','notifications','elections'
   ];
   actions text[] := array['view','create','edit','delete','approve','reject','submit','publish','export','manage','assign'];
 begin

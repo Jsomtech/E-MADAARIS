@@ -9,7 +9,8 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "db:seed": "node src/scripts/bootstrapSuperAdmin.js",
-    "db:migrate:print": "node src/scripts/printMigrations.js"
+    "db:migrate:print": "node src/scripts/printMigrations.js",
+    "db:sql:check": "node src/scripts/checkSql.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.10",
@@ -24,5 +25,8 @@
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
     "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "libpg-query": "^18.2.2"
   }
 }

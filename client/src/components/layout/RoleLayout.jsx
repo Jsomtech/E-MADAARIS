@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  Bell, ChevronDown, Languages, LogOut, Menu, Search, User, X,
+  Bell, ChevronDown, Languages, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Search, User, X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { toast } from 'react-toastify';
@@ -17,6 +17,13 @@ function initials(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return 'U';
   return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+const COLLAPSE_KEY = 'emadaaris.sidebarCollapsed';
+
+/** Desktop rail preference; stored as a plain string so an unparseable value is simply "expanded". */
+function readCollapsed() {
+  try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
 }
 
 function Dropdown({ trigger, children, buttonClassName = 'user-chip' }) {
@@ -91,17 +98,23 @@ function NotificationBell() {
   );
 }
 
-function Sidebar({ groups, config, open, onNavigate }) {
+function Sidebar({ groups, config, open, collapsed, onToggleCollapse, onNavigate }) {
   const { t } = useTranslation();
   const { profile } = useAuth();
+  const label = (item) => t(`modules.${item.key}`, { defaultValue: humanize(item.key) });
   return (
-    <aside className={clsx('app-sidebar', open && 'show')}>
+    <aside className={clsx('app-sidebar', open && 'show', collapsed && 'collapsed')}>
       <div className="brand">
         <BrandLogo school={profile?.school} tile />
         <div className="min-width-0">
           <strong className="text-truncate d-block">{profile?.school?.school_name || 'E-MADAARIS'}</strong>
           <div className="role-label">{config.label}</div>
         </div>
+        <button type="button" className="sidebar-toggle d-none d-lg-grid" onClick={onToggleCollapse}
+          aria-label={collapsed ? t('common.expandMenu', { defaultValue: 'Expand menu' }) : t('common.collapseMenu', { defaultValue: 'Collapse menu' })}
+          title={collapsed ? t('common.expandMenu', { defaultValue: 'Expand menu' }) : t('common.collapseMenu', { defaultValue: 'Collapse menu' })}>
+          {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+        </button>
       </div>
       {profile?.school && (
         <div className="sidebar-tenant">
@@ -117,12 +130,13 @@ function Sidebar({ groups, config, open, onNavigate }) {
             <span>{t(group.title, { defaultValue: group.title })}</span>
             {group.items.map((item) => {
               const Icon = ICONS[item.icon] || ICONS.dashboard;
+              const name = label(item);
               return (
-                <NavLink key={item.to} to={item.to} end={item.to === config.home}
+                <NavLink key={item.to} to={item.to} end={item.to === config.home} title={name}
                   className={({ isActive }) => clsx('app-nav-link', isActive && 'active')}
                   onClick={onNavigate}>
                   <Icon size={16} />
-                  {t(`modules.${item.key}`, { defaultValue: humanize(item.key) })}
+                  <span className="text-truncate">{name}</span>
                 </NavLink>
               );
             })}
@@ -130,12 +144,12 @@ function Sidebar({ groups, config, open, onNavigate }) {
         ))}
         <div className="app-nav-group" style={{ marginBottom: 0 }}>
           <span>{t('nav.account', { defaultValue: 'Account' })}</span>
-          <NavLink to="/account" className="app-nav-link" onClick={onNavigate}><User size={16} /> {t('common.account')}</NavLink>
-          <NavLink to="/notifications" className="app-nav-link" onClick={onNavigate}><Bell size={16} /> {t('common.notifications')}</NavLink>
+          <NavLink to="/account" className="app-nav-link" title={t('common.account')} onClick={onNavigate}><User size={16} /> <span>{t('common.account')}</span></NavLink>
+          <NavLink to="/notifications" className="app-nav-link" title={t('common.notifications')} onClick={onNavigate}><Bell size={16} /> <span>{t('common.notifications')}</span></NavLink>
         </div>
       </nav>
       <div className="sidebar-footer">
-        <Link to="/account" className="sidebar-user" onClick={onNavigate}>
+        <Link to="/account" className="sidebar-user" title={profile?.fullName} onClick={onNavigate}>
           <span className="avatar">{initials(profile?.fullName)}</span>
           <span className="min-width-0 flex-grow-1">
             <span className="d-block text-truncate" style={{ fontSize: '.8rem', fontWeight: 600 }}>{profile?.fullName}</span>
@@ -153,7 +167,14 @@ export default function RoleLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const [query, setQuery] = useState('');
+
+  const toggleCollapsed = () => setCollapsed((prev) => {
+    const next = !prev;
+    try { localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0'); } catch { /* private browsing: the rail just resets */ }
+    return next;
+  });
 
   const config = roleConfig(profile?.primaryRole);
   const { groups } = navigationFor(profile);
@@ -189,7 +210,8 @@ export default function RoleLayout() {
 
   return (
     <div className="app-shell">
-      <Sidebar groups={groups} config={config} open={mobileOpen} onNavigate={() => setMobileOpen(false)} />
+      <Sidebar groups={groups} config={config} open={mobileOpen} collapsed={collapsed}
+        onToggleCollapse={toggleCollapsed} onNavigate={() => setMobileOpen(false)} />
       {mobileOpen && (
         <div className="d-lg-none position-fixed top-0 start-0 w-100 h-100" style={{ background: 'rgba(19,12,45,.45)', zIndex: 1040 }}
           onClick={() => setMobileOpen(false)} />

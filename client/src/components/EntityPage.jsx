@@ -120,6 +120,15 @@ export default function EntityPage({ config, title, subtitle, defaultFilters = {
     || Object.values(filters).some((v) => v !== '' && v != null)
     || Object.values(lockFilters || {}).some((v) => v !== '' && v != null);
   const canBulkClear = canDelete && !isPortalAccount && !narrowed && (list.total ?? 0) > 0;
+  // The clearance document is an official record of the whole student file, so it follows the
+  // server's students.export gate — administrators and the admissions desk, never a portal login.
+  const mayClearance = studentMode && !isPortalAccount && can('students.export');
+  const downloadClearance = useCallback(async (row) => {
+    try {
+      await downloadFile(`/school/clearance/${row.id}/document?purpose=clearance`,
+        `${row.admission_number || 'student'}-clearance.pdf`);
+    } catch (error) { toast.error(error.message); }
+  }, []);
 
   useEffect(() => {
     const id = setTimeout(() => setSearch(query), 350);
@@ -367,6 +376,8 @@ export default function EntityPage({ config, title, subtitle, defaultFilters = {
         onRetry={list.reload}
         onEdit={canEdit ? openEdit : undefined}
         onDelete={canDelete ? (row) => setConfirm(row) : undefined}
+        onDocument={mayClearance ? downloadClearance : undefined}
+        documentLabel={t('students.clearanceHint', { defaultValue: 'Download clearance document' })}
       />
 
       <Modal open={Boolean(editing)} title={editing?.id ? t('common.edit') : t('common.create')}

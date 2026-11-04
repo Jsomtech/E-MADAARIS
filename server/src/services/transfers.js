@@ -3,16 +3,17 @@ import { ApiError } from '../middleware/error.js';
 import { audit } from './audit.js';
 import { nextAdmissionNumber } from './scopes.js';
 import { provisionStudentAccount, studentRoleId } from './studentAccounts.js';
+import { buildStudentPack, packFromLegacyDossier } from './studentPack.js';
 
 /**
  * Cross-school student transfers.
  *
  * A student's rows are welded to their school by non-cascading foreign keys (classes, exam
  * sessions, attendance sessions all belong to the sending tenant), so a live row cannot simply
- * be re-pointed at another school. Instead the sending school captures a dossier — profile plus
- * guardians, documents, attendance, marks and fees — hands it to the receiving school, and then
- * clears the student. The receiving school re-admits the student with its own admission number
- * and keeps the shared dossier on the record (`students.transfer_history`) for reference.
+ * be re-pointed at another school. Instead the sending school shares a pack — profile, class and
+ * enrolment, guardians, documents, attendance, every examination result with its grade and the fee
+ * position — which the receiving school reads before it decides. On approval the learner is
+ * re-admitted with a fresh admission number and the pack is kept on the new record.
  *
  * Only a school administrator of the sending school can start or cancel a transfer, and only a
  * school administrator of the receiving school can approve or reject it. The super admin can read
@@ -20,7 +21,6 @@ import { provisionStudentAccount, studentRoleId } from './studentAccounts.js';
  */
 
 const MISSING_TABLE = /42P01|could not find the table|does not exist|relation .* does not exist/i;
-const MISSING_COLUMN = /42703|could not find|does not exist|schema cache|unknown column/i;
 
 /** True once migration 0020 has created student_transfers; probed once per process. */
 let transfersReady = null;
@@ -38,61 +38,31 @@ function assertReady(ready) {
   }
 }
 
-/** Strip the columns the receiving school must never inherit from the sending tenant. */
-function portableStudent(student) {
-  const {
-    id, school_id, user_id, admission_number, academic_year_id, class_id, section_id,
-    created_at, updated_at, ...rest
-  } = student;
-  return rest;
-}
-
 /**
- * Everything the receiving school is allowed to see about the student, snapshotted as plain JSON.
- * File-backed rows (documents, photos) keep their metadata and path so the history is auditable;
- * the actual bytes stay in the sending school's storage bucket.
+ * The class, section and academic year a receiving school uses for a transferred learner.
+ * Ids never cross tenants, so the match is made on names; anything without an exact match is
+ * left blank for the receiving administrator to set.
  */
-export async function buildDossier(schoolId, studentId) {
+async function matchDestinationPlacement(toSchoolId, enrolment) {
   const db = requireDb();
-  const [studentRes, guardianLinks, documents, attendance, marks, invoices, payments] = await Promise.all([
-    db.from('students').select('*').eq('id', studentId).eq('school_id', schoolId).maybeSingle(),
-    db.from('student_guardians')
-      .select('relationship, is_primary, guardians(id, full_name, phone, email, address, relationship, occupation)')
-      .eq('school_id', schoolId).eq('student_id', studentId),
-    db.from('student_documents')
-      .select('document_type, file_name, file_path, mime_type, size_bytes, created_at')
-      .eq('school_id', schoolId).eq('student_id', studentId),
-    db.from('attendance_records')
-      .select('attendance_date, attendance_status, remarks, class_id, subject_id')
-      .eq('school_id', schoolId).eq('student_id', studentId).order('attendance_date', { ascending: false }),
-    db.from('marks')
-      .select('marks_obtained, maximum_marks, approval_status, subject_id, subjects(name), examination_id, examinations(name, academic_year_id)')
-      .eq('school_id', schoolId).eq('student_id', studentId),
-    db.from('fee_invoices')
-      .select('invoice_number, term_id, subtotal, discount, total, balance, currency, due_date, status, created_at')
-      .eq('school_id', schoolId).eq('student_id', studentId),
-    db.from('fee_payments')
-      .select('transaction_reference, amount, currency, payment_method, status, paid_at, note')
-      .eq('school_id', schoolId).eq('student_id', studentId),
-  ]);
-  if (studentRes.error) throw new ApiError(500, studentRes.error.message);
-  if (!studentRes.data) throw new ApiError(404, 'That student is not part of your school.');
-
-  const attendanceRows = attendance.data || [];
-  const attendanceSummary = attendanceRows.reduce((acc, r) => {
-    acc[r.attendance_status] = (acc[r.attendance_status] || 0) + 1;
-    return acc;
-  }, {});
-
-  return {
-    student: portableStudent(studentRes.data),
-    guardians: (guardianLinks.data || []).map((l) => ({ ...l.guardians, link_relationship: l.relationship, is_primary: l.is_primary })),
-    documents: documents.data || [],
-    attendance: { summary: attendanceSummary, records: attendanceRows.slice(0, 500) },
-    marks: marks.data || [],
-    fees: { invoices: invoices.data || [], payments: payments.data || [] },
-    captured_at: new Date().toISOString(),
-  };
+  const placement = { class_id: null, section_id: null, academic_year_id: null };
+  const wanted = String(enrolment?.class_name || '').trim();
+  if (wanted) {
+    const { data: found } = await db.from('classes').select('id').eq('school_id', toSchoolId).ilike('name', wanted).limit(1);
+    if (found?.[0]) {
+      placement.class_id = found[0].id;
+      const wantedSection = String(enrolment?.section_name || '').trim();
+      if (wantedSection) {
+        const { data: section } = await db.from('sections').select('id').eq('school_id', toSchoolId)
+          .eq('class_id', found[0].id).ilike('name', wantedSection).limit(1);
+        if (section?.[0]) placement.section_id = section[0].id;
+      }
+    }
+  }
+  const { data: year } = await db.from('academic_years').select('id').eq('school_id', toSchoolId)
+    .eq('is_current', true).order('start_date', { ascending: false }).limit(1);
+  if (year?.[0]) placement.academic_year_id = year[0].id;
+  return placement;
 }
 
 async function loadSchool(schoolId) {
@@ -225,7 +195,7 @@ async function loadTransfer(id) {
 /**
  * Approve or reject a transfer. Only the receiving school's administrator decides.
  * Approving re-admits the student at the destination with a fresh login, stores the shared
- * dossier, then clears the student (and their login) from the sending school.
+ * pack, then clears the student (and their login) from the sending school.
  */
 export async function decideTransfer(req, id, { decision, note }) {
   const ready = await transfersEnabled();
@@ -255,13 +225,14 @@ export async function decideTransfer(req, id, { decision, note }) {
   const toSchoolId = transfer.to_school_id;
 
   // 1. Capture everything while the source rows still exist.
-  const dossier = await buildDossier(fromSchoolId, transfer.student_id);
+  const pack = await buildStudentPack(fromSchoolId, transfer.student_id, { issuedBy: transfer.requested_by_name || null });
 
   const destination = await loadSchool(toSchoolId);
-  const target = dossier.student;
+  const target = pack.student;
+  const placement = await matchDestinationPlacement(toSchoolId, pack.enrolment);
 
-  // 2. Re-admit at the destination: new admission number, no class yet, dossier attached.
-  const admission_number = await nextAdmissionNumber(toSchoolId, null, { schoolName: destination?.school_name });
+  // 2. Re-admit at the destination: fresh admission number, the same class and section by name.
+  const admission_number = await nextAdmissionNumber(toSchoolId, placement.academic_year_id, { schoolName: destination?.school_name });
   let newStudent;
   try {
     const { data, error } = await db.from('students').insert({
@@ -277,13 +248,19 @@ export async function decideTransfer(req, id, { decision, note }) {
       address: target.address || null,
       emergency_contact: target.emergency_contact || null,
       status: 'active',
+      class_id: placement.class_id,
+      section_id: placement.section_id,
+      academic_year_id: placement.academic_year_id,
       transfer_history: {
         from_school_id: fromSchoolId,
         from_school_name: transfer.payload?.from_school_name || null,
         transfer_id: transfer.id,
         reason: transfer.reason,
         previous_admission_number: transfer.admission_number,
-        dossier,
+        previous_academic_year: pack.enrolment.academic_year,
+        previous_class: pack.enrolment.class_name,
+        previous_section: pack.enrolment.section_name,
+        pack,
       },
     }).select('*').single();
     if (error) throw error;
@@ -304,14 +281,14 @@ export async function decideTransfer(req, id, { decision, note }) {
     loginNote = `Student admitted, but the login could not be created automatically: ${err.message}`;
   }
 
-  // 4. Mark the transfer completed with the shared dossier and the new record id.
+  // 4. Mark the transfer completed with the shared pack and the new record id.
   const { data: completed, error: completeError } = await db.from('student_transfers').update({
     status: 'completed',
     decided_by: auth.userId || null,
     decided_by_name: auth.fullName || null,
     decision_note: [String(note || '').trim(), loginNote].filter(Boolean).join(' · ') || null,
     new_student_id: newStudent.id,
-    payload: { ...(transfer.payload || {}), dossier, to_school_name: destination?.school_name || null },
+    payload: { ...(transfer.payload || {}), pack, to_school_name: destination?.school_name || null },
     completed_at: new Date().toISOString(),
   }).eq('id', id).select('*').single();
   if (completeError) throw new ApiError(500, completeError.message);
@@ -364,7 +341,7 @@ export async function cancelTransfer(req, id) {
   return data;
 }
 
-/** Full transfer record including the dossier, for the two schools involved or the super admin. */
+/** Full transfer record including the shared pack, for the two schools involved or the super admin. */
 export async function getTransfer(req, id) {
   const ready = await transfersEnabled();
   assertReady(ready);
@@ -373,5 +350,24 @@ export async function getTransfer(req, id) {
   const isPlatform = auth.type === 'platform';
   const involved = auth.type === 'school' && (transfer.from_school_id === auth.schoolId || transfer.to_school_id === auth.schoolId);
   if (!isPlatform && !involved) throw new ApiError(403, 'You cannot view this transfer.');
-  return transfer;
+
+  // A decision needs the learner's class, marks and fee position up front, so an undecided
+  // request is read live from the sending school; a completed one keeps its stored snapshot.
+  let pack = transfer.payload?.pack || null;
+  if (!pack && transfer.status === 'requested' && transfer.student_id) {
+    try {
+      pack = await buildStudentPack(transfer.from_school_id, transfer.student_id, { issuedBy: transfer.requested_by_name || null });
+    } catch {
+      pack = null; // the sending school cleared the record while the request was open
+    }
+  }
+  if (!pack && transfer.payload?.dossier) {
+    pack = packFromLegacyDossier(transfer.payload.dossier, { issuedBy: transfer.requested_by_name || null });
+    if (pack) {
+      // The older snapshot stripped the identity columns; the transfer row still carries them.
+      pack.enrolment.admission_number ||= transfer.admission_number || null;
+      pack.student.full_name ||= transfer.student_name || null;
+    }
+  }
+  return { ...transfer, payload: { ...(transfer.payload || {}), pack } };
 }

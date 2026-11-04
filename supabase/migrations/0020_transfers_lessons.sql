@@ -18,7 +18,7 @@ create table if not exists student_transfers (
   decided_by_name text,
   decision_note text,
   new_student_id uuid,
-  payload jsonb not null default '{}'::jsonb,        -- dossier snapshot: guardians, documents, attendance, marks, fees
+  payload jsonb not null default '{}'::jsonb,        -- dossier snapshot: guardians, documents, attendance, marks
   completed_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

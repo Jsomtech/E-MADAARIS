@@ -37,6 +37,30 @@ export async function classesExtraColumns() {
 }
 
 /**
+ * Migration 0021 adds class_monthly_fees and fee_payments.period_month — the two facts the monthly
+ * fee register is built from. Without them the screen cannot say who paid which month, so it asks
+ * for the migration instead of failing on the first query.
+ *
+ * A "not ready" answer is never cached: the school applies the SQL file while this API is running,
+ * and the page's Retry button must pick it up without a restart.
+ */
+let monthlyFees = null;
+
+export async function monthlyFeeSchemaReady() {
+  if (monthlyFees === true) return true;
+  const [table, column] = await Promise.all([
+    requireDb().from('class_monthly_fees').select('class_id, amount').limit(1),
+    requireDb().from('fee_payments').select('id, period_month').limit(1),
+  ]);
+  const error = table.error || column.error;
+  if (!error) { monthlyFees = true; return true; }
+  if (/could not find|does not exist|schema cache|unknown column|relation/i.test(error.message || '')) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Migration 0020 adds learning_materials.link_url (Google Drive video links) and the
  * student_transfers table. The lessons UI probes this so it can prompt for the migration
  * instead of failing every video save with PGRST204.
@@ -49,6 +73,27 @@ export async function learningMaterialLinkColumn() {
   if (!error) { lessonLink = true; return true; }
   if (/could not find|does not exist|schema cache|unknown column/i.test(error.message || '')) {
     lessonLink = false;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Migration 0022 adds the student council election tables and the election_cast_ballot() function.
+ * Like the monthly register, a "not ready" answer is never cached — the school pastes the SQL while
+ * this API is running, and the page's Retry button must pick it up without a restart.
+ */
+let electionTables = null;
+
+export async function electionsSchemaReady() {
+  if (electionTables === true) return true;
+  const [tables, tick] = await Promise.all([
+    requireDb().from('elections').select('id, status, start_at, end_at').limit(1),
+    requireDb().rpc('election_tick'),
+  ]);
+  const error = tables.error || tick.error;
+  if (!error) { electionTables = true; return true; }
+  if (/could not find|does not exist|schema cache|unknown column|function|relation/i.test(error.message || '')) {
     return false;
   }
   return true;

@@ -871,11 +871,49 @@ textarea.form-control { min-height: 70px; resize: vertical; }
 }
 
 /* ── App shell branding ──────────────────────────────────────── */
-.app-sidebar .brand .brand-logo-tile { flex: 0 0 auto; padding: 4px 7px; border-radius: 10px; }
-.app-sidebar .brand .brand-logo-tile img { height: 27px; max-width: 116px; }
+/* The school's mark always reads as a disc, whatever shape it was uploaded in: a white circle
+   with the image scaled to fit, so a wide wordmark is never chopped into a sliver. */
+.app-sidebar .brand .brand-logo-tile {
+  flex: 0 0 auto; width: 40px; height: 40px; padding: 0;
+  border-radius: 50%; overflow: hidden;
+}
+.app-sidebar .brand .brand-logo-tile img { width: 84%; height: 84%; max-width: none; max-height: none; object-fit: contain; }
 .app-sidebar .brand > div { min-width: 0; flex: 1 1 auto; }
 .app-sidebar .brand strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .app-sidebar .brand .role-label { font-size: 0.72rem; color: #9c93c9; }
+
+/* Anywhere a school mark sits alone, keep it round. */
+.round-logo {
+  width: 30px; height: 30px; flex: 0 0 30px; border-radius: 50%; object-fit: cover;
+  background: #fff; border: 1px solid var(--line);
+}
+
+/* ── Collapsible sidebar ─────────────────────────────────────── */
+.sidebar-toggle {
+  flex: 0 0 auto; display: grid; place-items: center; width: 28px; height: 28px;
+  margin-left: auto; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.05); color: #c6c1e2; cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.sidebar-toggle:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.app-sidebar, .app-sidebar .brand, .app-nav-link { transition: width 0.18s ease, flex-basis 0.18s ease, padding 0.18s ease; }
+
+@media (min-width: 992px) {
+  .app-sidebar.collapsed { width: 78px; flex-basis: 78px; padding: 1rem 0.55rem; }
+  .app-sidebar.collapsed .brand { flex-direction: column; gap: 0.5rem; padding: 0.3rem 0 0.9rem; }
+  .app-sidebar.collapsed .brand .sidebar-toggle { margin-left: 0; }
+  .app-sidebar.collapsed .brand > div,
+  .app-sidebar.collapsed .sidebar-tenant,
+  .app-sidebar.collapsed .app-nav-group > span,
+  .app-sidebar.collapsed .app-nav-link span,
+  .app-sidebar.collapsed .sidebar-user > span:not(.avatar) { display: none; }
+  .app-sidebar.collapsed .app-nav-group {
+    margin-bottom: 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+  .app-sidebar.collapsed .app-nav-group:last-of-type { border-bottom: 0; }
+  .app-sidebar.collapsed .app-nav-link { justify-content: center; gap: 0; padding: 0.55rem 0; }
+  .app-sidebar.collapsed .sidebar-user { justify-content: center; padding: 0.5rem 0; }
+}
 .school-hero {
   display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
   border: 1px solid var(--line); border-radius: 18px; background: #fff; padding: 1.1rem 1.25rem;
@@ -1328,4 +1366,63 @@ textarea.form-control { min-height: 70px; resize: vertical; }
   .school-form-card-head { padding: 0.7rem 0.8rem; }
   .school-form-fields { padding: 0.7rem 0.55rem 0; }
   .school-form-chip { display: none; }
+}
+
+/* ── Elections ───────────────────────────────────────────────── */
+.elections-position-heading {
+  font-size: 0.74rem; font-weight: 750; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--brand-strong); padding-bottom: 0.4rem; margin-bottom: 0.75rem;
+  border-bottom: 2px solid var(--brand-soft);
+}
+
+.candidate-card-grid {
+  display: grid; gap: 0.85rem;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.candidate-card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0.9rem; box-shadow: var(--shadow-xs); transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.candidate-card.is-selected { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-ring); }
+.candidate-card[role="button"] { cursor: pointer; }
+.candidate-card[role="button"]:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+.candidate-card:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+.elections-radio { color: var(--brand); display: inline-flex; flex-shrink: 0; margin-top: 2px; }
+.elections-radio-empty {
+  display: inline-block; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--line-strong); background: var(--surface);
+}
+
+.elections-campaign-title {
+  display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; font-weight: 650;
+  color: var(--brand-strong); background: var(--brand-wash); border-radius: var(--radius-sm); padding: 0.3rem 0.55rem;
+}
+
+.elections-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+.elections-manifesto, .elections-manifesto-list {
+  margin: 0; padding-left: 1.05rem; font-size: 0.82rem; color: var(--ink-2);
+  display: flex; flex-direction: column; gap: 0.22rem;
+}
+.elections-manifesto li::marker { color: var(--brand); }
+
+/* The ballot stays reachable while a learner scrolls the candidate list. */
+.elections-ballot-bar {
+  position: sticky; bottom: 0.75rem; z-index: 1020;
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-lg);
+  padding: 0.75rem 1rem; box-shadow: var(--shadow-md); margin-bottom: 1rem;
+}
+
+.elections-winner {
+  display: flex; align-items: center; gap: 0.75rem; height: 100%;
+  background: var(--brand-wash); border: 1px solid var(--brand-soft); border-radius: var(--radius); padding: 0.75rem 0.9rem;
+}
+.elections-winner.is-tied { background: #fff8ec; border-color: #f6dfb4; }
+
+@media (max-width: 575.98px) {
+  .candidate-card-grid { grid-template-columns: 1fr; }
+  .elections-ballot-bar { position: static; box-shadow: var(--shadow-sm); }
 }

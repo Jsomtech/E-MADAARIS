@@ -1,15 +1,17 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight, Pencil, Trash2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FileDown, Loader2, Pencil, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { EmptyState, ErrorState, Spinner, StatusBadge, money } from './Basics.jsx';
 
 /**
  * columns: [{ key, label, render(row), type: 'status'|'money'|'date'|'datetime', width, className }]
  * rows come from the API; `total`/`page`/`pageSize` drive the pager when supplied.
+ * `onDocument` adds a per-row download (e.g. the student clearance document).
  */
 export default function DataTable({
   columns, rows, loading, error, onRetry, total, page, pageSize, onPage,
-  onEdit, onDelete, rowKey = (r) => r.id, empty, dense, actionsLabel,
+  onEdit, onDelete, onDocument, documentLabel, rowKey = (r) => r.id, empty, dense, actionsLabel,
 }) {
   const { t } = useTranslation();
   const size = pageSize || 25;
@@ -17,7 +19,8 @@ export default function DataTable({
   const pagerTotal = total != null ? total : rowCount;
   const pages = Math.max(1, Math.ceil(pagerTotal / size));
   const current = page || 1;
-  const hasActions = Boolean(onEdit || onDelete);
+  const hasActions = Boolean(onEdit || onDelete || onDocument);
+  const [docBusy, setDocBusy] = useState(null);
 
   if (loading && !rows) return <div className="card-soft p-4"><Spinner label={t('common.loading')} /></div>;
   if (error) return <div className="card-soft p-3"><ErrorState error={error} onRetry={onRetry} /></div>;
@@ -54,6 +57,14 @@ export default function DataTable({
                 ))}
                 {hasActions && (
                   <td className="text-end white-space-nowrap">
+                    {onDocument && (
+                      <button type="button" className="btn btn-icon sm" disabled={docBusy === rowKey(row)}
+                        onClick={() => { setDocBusy(rowKey(row)); Promise.resolve(onDocument(row)).finally(() => setDocBusy(null)); }}
+                        title={documentLabel || t('common.download', { defaultValue: 'Download' })}
+                        aria-label={documentLabel || t('common.download', { defaultValue: 'Download' })}>
+                        {docBusy === rowKey(row) ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
+                      </button>
+                    )}
                     {onEdit && (
                       <button type="button" className="btn btn-icon sm" onClick={() => onEdit(row)} title={t('common.edit')} aria-label={t('common.edit')}>
                         <Pencil size={14} />

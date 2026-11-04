@@ -39,6 +39,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     finance: ALL, learning: ALL, announcements: ['view', 'create', 'publish'],
     reports: ['view', 'export'], certificates: ALL, library: ALL, discipline: ALL,
     transport: ALL, hr: ALL, reception: ALL, lab: ALL,
+    elections: [...ALL, 'reject', 'publish'],
     subscription: ['view'], support: ['view', 'create'], audit: ['view'], notifications: ['view'],
   }),
   principal: expand({
@@ -46,7 +47,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     guardians: ['view'], attendance: ['view'], timetable: ['view'],
     examinations: ['view'], marks: ['view'], results: ['view', 'approve', 'reject'],
     finance: ['view'], reports: ['view', 'export'], announcements: ['view', 'create'],
-    discipline: ['view'], notifications: ['view'],
+    discipline: ['view'], notifications: ['view'], elections: ['view', 'export'],
   }),
   vice_principal: expand({
     students: ['view'], teachers: ['view'], attendance: ['view'], timetable: ['view'],
@@ -79,6 +80,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     students: ['view'], attendance: ['view'], timetable: ['view'],
     examinations: ['view'], marks: ['view'], results: ['view'],
     learning: ['view'], finance: ['view'], announcements: ['view'], notifications: ['view'],
+    elections: ['view', 'submit'],
   }),
   parent: expand({
     students: ['view'], attendance: ['view'], timetable: ['view'],

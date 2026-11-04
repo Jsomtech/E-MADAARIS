@@ -17,6 +17,14 @@ export function notFound(req, res) {
 
 // eslint-disable-next-line no-unused-vars
 export function errorHandler(err, req, res, next) {
+  // A report stream that fails after its first byte cannot be answered with JSON — the headers are
+  // already on the wire, and trying to set them again throws a second error that hides the real one.
+  // Close the response instead, so the client sees a failed download rather than a half-written file.
+  if (res.headersSent) {
+    logger.error({ err, url: req.originalUrl }, 'response failed after streaming began');
+    if (!res.writableEnded) res.end();
+    return undefined;
+  }
   if (err instanceof ZodError) {
     return res.status(422).json({
       error: 'Validation failed',

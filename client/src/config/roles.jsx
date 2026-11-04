@@ -3,7 +3,7 @@ import {
   ClipboardList, FileCheck2, PenSquare, Award, Wallet, ReceiptText, TrendingDown, Library,
   ShieldAlert, Bus, FlaskConical, DoorOpen, Bell, Settings, CreditCard, Headphones, Activity,
   BarChart3, Building2, FileStack, UserCog, Megaphone, Home, Star, ClipboardSignature, BadgeCheck,
-  Trash2, DatabaseBackup, Palette, ArrowRightLeft,
+  Trash2, DatabaseBackup, Palette, ArrowRightLeft, Vote,
 } from 'lucide-react';
 
 export const ICONS = {
@@ -17,6 +17,7 @@ export const ICONS = {
   roles: UserCog, announcements: Megaphone, home: Home, admissions: Star,
   exams: ClipboardSignature, usersCog: UserCog, idCards: BadgeCheck,
   trash: Trash2, backups: DatabaseBackup, content: Palette, transfers: ArrowRightLeft,
+  elections: Vote,
 };
 
 const m = (key, perm, icon) => ({ key, to: `/m/${key}`, perm, icon });
@@ -43,6 +44,7 @@ export const ROLE_CONFIG = {
         custom('tickets', '/platform/tickets', 'platform.tickets.manage', 'support'),
         custom('content', '/platform/content', 'platform.dashboard.view', 'content'),
         custom('transfers', '/platform/transfers', 'platform.schools.view', 'transfers'),
+        custom('elections', '/platform/elections', 'platform.dashboard.view', 'elections'),
         custom('backups', '/platform/backups', 'platform.dashboard.view', 'backups'),
         custom('trash', '/platform/trash', 'platform.audit.view', 'trash'),
         custom('audit', '/platform/audit', 'platform.audit.view', 'audit'),
@@ -97,9 +99,10 @@ export const ROLE_CONFIG = {
         m('grade-scales', 'examinations.view', 'analytics'),
       ] },
       { title: 'nav.finance', items: [
+        custom('fee-collection', '/m/fee-collection', 'finance.view', 'payments'),
+        custom('finance-payments', '/m/finance-payments', 'finance.view', 'payments'),
         m('fee-categories', 'finance.view', 'finance'),
         m('fee-structures', 'finance.view', 'finance'),
-        custom('finance-payments', '/m/finance-payments', 'finance.view', 'payments'),
         m('expenses', 'finance.view', 'expenses'),
         custom('finance-summary', '/m/finance-summary', 'finance.view', 'analytics'),
       ] },
@@ -114,6 +117,7 @@ export const ROLE_CONFIG = {
         m('lab-equipment', 'lab.view', 'lab'),
         custom('visitors', '/m/visitors', 'reception.view', 'reception'),
         m('certificate-templates', 'certificates.view', 'certificates'),
+        m('elections', 'elections.view', 'elections'),
       ] },
       { title: 'nav.system', items: [
         custom('profile', '/school/profile', 'school.view', 'school'),
@@ -142,6 +146,7 @@ export const ROLE_CONFIG = {
         m('discipline-records', 'discipline.view', 'discipline'),
         m('announcements', 'announcements.view', 'announcements'),
         custom('reports', '/school/reports', 'reports.view', 'analytics'),
+        m('elections', 'elections.view', 'elections'),
       ] },
     ],
   },
@@ -201,6 +206,7 @@ export const ROLE_CONFIG = {
     groups: [
       { title: 'nav.overview', items: [
         custom('dashboard', '/accountant', 'finance.view', 'dashboard'),
+        custom('fee-collection', '/m/fee-collection', 'finance.view', 'payments'),
         custom('finance-payments', '/m/finance-payments', 'finance.create', 'payments'),
         custom('finance-summary', '/m/finance-summary', 'finance.view', 'analytics'),
         m('fee-categories', 'finance.view', 'finance'),
@@ -253,6 +259,7 @@ export const ROLE_CONFIG = {
         m('assignments', 'learning.view', 'marks'),
         m('learning-materials', 'learning.view', 'subjects'),
         custom('fees', '/school/my-fees', 'finance.view', 'finance'),
+        custom('elections', '/school/student-elections', 'elections.view', 'elections'),
         m('announcements', 'announcements.view', 'announcements'),
       ] },
     ],

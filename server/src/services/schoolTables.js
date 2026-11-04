@@ -9,7 +9,11 @@ export const CLEAR_TABLES = [
   // finance
   'payment_allocations', 'receipts', 'fee_payments', 'fee_invoices', 'student_fee_assignments',
   'examination_clearances', 'financial_approvals', 'expenses', 'expense_categories',
-  'fee_structures', 'fee_categories',
+  'fee_structures', 'fee_categories', 'class_monthly_fees',
+  // student council elections — before 'students', because candidates are enrolments
+  'candidate_manifestos', 'election_ballot_selections', 'election_ballots',
+  'election_voter_participation', 'election_results', 'election_candidates',
+  'election_positions', 'elections',
   // learning
   'assignment_grades', 'assignment_submissions', 'assignment_attachments', 'assignments',
   'learning_materials',

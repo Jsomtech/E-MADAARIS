@@ -1,12 +1,13 @@
 // Super-admin oversight of every cross-school student transfer on the platform (read-only).
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowRightLeft, Eye, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowRightLeft, Eye, RefreshCw } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { apiGet } from '../../api/client.js';
 import { toast } from 'react-toastify';
 import DataTable from '../../components/ui/DataTable.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
+import StudentPackPanel from '../../components/transfers/StudentPackPanel.jsx';
 import { PageHeader, StatusBadge, dateOnly } from '../../components/ui/Basics.jsx';
 
 const STATUSES = ['requested', 'completed', 'rejected', 'cancelled'];
@@ -101,7 +102,7 @@ function TransferDetailModal({ row, onClose }) {
   }, [row]);
 
   const record = full || row || {};
-  const dossier = record.payload?.dossier;
+  const pack = record.payload?.pack;
 
   return (
     <Modal open={Boolean(row)} size="lg" icon={ArrowRightLeft}
@@ -118,27 +119,7 @@ function TransferDetailModal({ row, onClose }) {
         {record.requested_by_name && <div className="small text-muted mt-1">{t('transfers.requestedBy', { defaultValue: 'Requested by' })} {record.requested_by_name}</div>}
         {record.decided_by_name && <div className="small text-muted mt-1">{t('transfers.decidedBy', { defaultValue: 'Decided by' })} {record.decided_by_name}{record.decision_note ? ` · ${record.decision_note}` : ''}</div>}
       </div>
-      {loading && <div className="text-muted small"><Loader2 size={14} className="animate-spin me-1" />{t('common.loading')}</div>}
-      {dossier && (
-        <div className="row g-2 small">
-          <Col label={t('transfers.guardians', { defaultValue: 'Guardians' })} value={dossier.guardians?.length || 0} />
-          <Col label={t('transfers.documents', { defaultValue: 'Documents' })} value={dossier.documents?.length || 0} />
-          <Col label={t('transfers.marks', { defaultValue: 'Marks' })} value={dossier.marks?.length || 0} />
-          <Col label={t('transfers.attendance', { defaultValue: 'Attendance' })} value={dossier.attendance?.records?.length || 0} />
-          <Col label={t('transfers.invoices', { defaultValue: 'Invoices' })} value={dossier.fees?.invoices?.length || 0} />
-        </div>
-      )}
+      <StudentPackPanel pack={pack} loading={loading} />
     </Modal>
-  );
-}
-
-function Col({ label, value }) {
-  return (
-    <div className="col-4">
-      <div className="card-soft p-2 text-center">
-        <div className="fs-5 fw-semibold tabular-nums">{value}</div>
-        <div className="text-muted" style={{ fontSize: 12 }}>{label}</div>
-      </div>
-    </div>
   );
 }

@@ -21,9 +21,11 @@ const TABLES = [
   'examination_types', 'examinations', 'exam_class_subjects', 'examination_components',
   'examination_schedules', 'examination_invigilators', 'examination_attendance', 'marks',
   'grade_scales', 'grade_ranges', 'result_approvals', 'report_cards',
-  'fee_categories', 'fee_structures', 'student_fee_assignments', 'fee_invoices', 'fee_payments',
+  'fee_categories', 'fee_structures', 'class_monthly_fees', 'student_fee_assignments', 'fee_invoices', 'fee_payments',
   'payment_allocations', 'receipts', 'expense_categories', 'expenses', 'financial_approvals',
   'examination_clearances',
+  'elections', 'election_positions', 'election_candidates', 'candidate_manifestos',
+  'election_voter_participation', 'election_ballots', 'election_ballot_selections', 'election_results',
   'learning_materials', 'assignments', 'assignment_attachments', 'assignment_submissions', 'assignment_grades',
   'announcements', 'certificate_templates', 'certificates', 'student_id_cards',
   'library_books', 'library_transactions', 'discipline_records',
@@ -31,7 +33,8 @@ const TABLES = [
   'lab_equipment', 'equipment_allocations', 'visitors', 'appointments',
 ];
 
-const BIG_TABLES = new Set(['attendance_records', 'marks', 'fee_payments', 'students', 'library_transactions']);
+const BIG_TABLES = new Set(['attendance_records', 'marks', 'fee_payments', 'students', 'library_transactions',
+  'election_ballot_selections', 'election_voter_participation']);
 const rowLimit = (table) => (BIG_TABLES.has(table) ? 3000 : 1000);
 
 const MAX_AUTO_BACKUPS = 60;

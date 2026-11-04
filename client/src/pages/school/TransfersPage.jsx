@@ -4,14 +4,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
 import {
-  ArrowRightLeft, Eye, Inbox, Loader2, Plus, RefreshCw, ShieldX, XCircle,
+  ArrowRightLeft, Eye, Loader2, Plus, RefreshCw, ShieldX, XCircle,
 } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { apiGet, apiPost } from '../../api/client.js';
+import { apiGet, apiPost, downloadFile } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import Field from '../../components/ui/Field.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
+import StudentPackPanel from '../../components/transfers/StudentPackPanel.jsx';
 import { EmptyState, PageHeader, StatusBadge, dateOnly } from '../../components/ui/Basics.jsx';
 
 const fullStudentName = (s) => s.full_name || [s.first_name, s.middle_name, s.last_name].filter(Boolean).join(' ');
@@ -191,10 +192,13 @@ function CreateTransferModal({ open, onClose, onSaved }) {
 // ── Detail / decide / cancel ────────────────────────────────────
 function TransferDetailModal({ row, onClose, onChanged }) {
   const { t } = useTranslation();
+  const { profile, can } = useAuth();
+  const schoolId = profile?.school?.id || profile?.schoolId;
   const [full, setFull] = useState(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   useEffect(() => {
     if (!row) { setFull(null); setNote(''); return; }
@@ -207,7 +211,18 @@ function TransferDetailModal({ row, onClose, onChanged }) {
   }, [row]);
 
   const record = full || row || {};
-  const dossier = record.payload?.dossier;
+  // The sending school's own learners can be papered; the receiving school reads the shared pack.
+  const pack = record.payload?.pack;
+  const mayDownload = Boolean(pack) && record.from_school_id === schoolId
+    && record.status === 'requested' && record.student_id && can('students.export');
+
+  const downloadClearance = useCallback(async () => {
+    setPdfBusy(true);
+    try {
+      await downloadFile(`/school/clearance/${record.student_id}/document?purpose=transfer`,
+        `${record.admission_number || 'student'}-clearance.pdf`);
+    } catch (e) { toast.error(e.message); } finally { setPdfBusy(false); }
+  }, [record.student_id, record.admission_number]);
 
   const act = useCallback(async (body) => {
     setBusy(true);
@@ -273,29 +288,11 @@ function TransferDetailModal({ row, onClose, onChanged }) {
         {record.new_student_id && <div className="small text-success mt-1">{t('transfers.admitted', { defaultValue: 'The student has been admitted at the destination.' })}</div>}
       </div>
 
-      {loading && <div className="text-muted small"><Loader2 size={14} className="animate-spin me-1" />{t('transfers.loadingDossier', { defaultValue: 'Loading shared records…' })}</div>}
+      <StudentPackPanel pack={pack} loading={loading} onDownload={mayDownload ? downloadClearance : undefined} downloadBusy={pdfBusy} />
 
-      {dossier && (
-        <div className="mb-3">
-          <div className="fw-semibold small mb-2 text-uppercase text-muted"><Inbox size={13} className="me-1" />{t('transfers.sharedRecords', { defaultValue: 'Records shared from the sending school' })}</div>
-          <div className="row g-2 small">
-            <DossierStat label={t('transfers.guardians', { defaultValue: 'Guardians' })} value={dossier.guardians?.length || 0} />
-            <DossierStat label={t('transfers.documents', { defaultValue: 'Documents' })} value={dossier.documents?.length || 0} />
-            <DossierStat label={t('transfers.marks', { defaultValue: 'Marks' })} value={dossier.marks?.length || 0} />
-            <DossierStat label={t('transfers.attendance', { defaultValue: 'Attendance entries' })} value={dossier.attendance?.records?.length || 0} />
-            <DossierStat label={t('transfers.invoices', { defaultValue: 'Fee invoices' })} value={dossier.fees?.invoices?.length || 0} />
-            <DossierStat label={t('transfers.payments', { defaultValue: 'Fee payments' })} value={dossier.fees?.payments?.length || 0} />
-          </div>
-          {dossier.guardians?.length > 0 && (
-            <div className="mt-2">
-              {dossier.guardians.map((g, i) => (
-                <div key={i} className="d-flex justify-content-between border-bottom py-1 small">
-                  <span>{g.full_name} <span className="text-muted">· {g.link_relationship || g.relationship}</span></span>
-                  <span className="text-muted">{g.phone || g.email || ''}</span>
-                </div>
-              ))}
-            </div>
-          )}
+      {!loading && !pack && record.status === 'requested' && (
+        <div className="alert alert-warning small">
+          {t('transfers.noPack', { defaultValue: 'The sending school no longer holds this record, so there is nothing to review. Reject or cancel the request.' })}
         </div>
       )}
 
@@ -304,16 +301,5 @@ function TransferDetailModal({ row, onClose, onChanged }) {
           value={note} onChange={setNote} />
       )}
     </Modal>
-  );
-}
-
-function DossierStat({ label, value }) {
-  return (
-    <div className="col-6 col-md-4">
-      <div className="card-soft p-2 text-center">
-        <div className="fs-5 fw-semibold tabular-nums">{value}</div>
-        <div className="text-muted" style={{ fontSize: 12 }}>{label}</div>
-      </div>
-    </div>
   );
 }

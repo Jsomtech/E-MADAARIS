@@ -12,6 +12,7 @@ import BackupsPage from './BackupsPage.jsx';
 import TrashPage from './TrashPage.jsx';
 import ContentPage from './ContentPage.jsx';
 import TransfersPage from './TransfersPage.jsx';
+import PlatformElectionsPage from './ElectionsPage.jsx';
 
 /** Keys are the first segment of /platform/*. */
 export const PLATFORM_SECTIONS = {
@@ -29,4 +30,5 @@ export const PLATFORM_SECTIONS = {
   audit: AuditPage,
   content: ContentPage,
   transfers: TransfersPage,
+  elections: PlatformElectionsPage,
 };

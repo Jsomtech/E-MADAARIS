@@ -24,6 +24,9 @@ import { studentAdminRouter } from './api/flows/studentsAdmin.js';
 import { classAdminRouter } from './api/flows/classesAdmin.js';
 import { transfersRouter } from './api/flows/transfers.js';
 import { lessonsRouter } from './api/flows/lessons.js';
+import { clearanceRouter } from './api/flows/clearance.js';
+import { electionsRouter } from './api/flows/elections.js';
+import { platformElectionsRouter } from './api/flows/platformElections.js';
 import { accountRouter } from './api/push.routes.js';
 
 const V1 = '/api/v1';
@@ -60,6 +63,7 @@ export function createApp() {
 
   gated.use('/platform', platformRouter);
   gated.use('/platform', platformSupportRouter);
+  gated.use('/platform/elections', platformElectionsRouter);
   gated.use('/account', accountRouter);
   gated.use('/school', schoolRouter);
   gated.use('/school/trash', trashRouter);
@@ -67,12 +71,14 @@ export function createApp() {
   gated.use('/school/classes', classAdminRouter);
   gated.use('/school/transfers', transfersRouter);
   gated.use('/school/lessons', lessonsRouter);
+  gated.use('/school/clearance', clearanceRouter);
   gated.use('/school/notifications', notificationsRouter);
   gated.use('/school/support', supportRouter);
   gated.use('/school/certificates', certificateRouter);
   gated.use('/school/id-cards', idCardRouter);
   gated.use('/school/reports', reportRouter);
   gated.use('/school/documents', documentRouter);
+  gated.use('/school/elections', electionsRouter);
 
   gated.use('/attendance', attendanceRouter);
   gated.use('/examinations', examRouter);
