@@ -117,11 +117,11 @@ async function recordBulkSnapshot(schoolId, bulk, rowCount, actor = {}, { label,
 /**
  * Read every tenant table into one bulk snapshot map (reused by clear-all and section clears).
  *
- * Eighty-two tables against a hosted database is eighty-two round trips, which at a half second
- * each is longer than any browser is willing to wait. The reads are independent, so they run eight
- * at a time — the same ceiling the backup scheduler uses — and a clear finishes in seconds.
+ * Eighty-two tables against a hosted database is eighty-two round trips, which one at a time is
+ * longer than any browser is willing to wait. The reads are independent, so they run twelve at a
+ * time and a clear finishes in seconds instead of minutes.
  */
-const READ_BATCH = 8;
+const READ_BATCH = 12;
 
 async function collectSchoolSnapshot(schoolId) {
   let rowCount = 0;

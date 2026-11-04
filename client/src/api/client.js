@@ -1,4 +1,5 @@
 import axios from 'axios';
+import i18n from '../i18n/index.js';
 
 const ACCESS_KEY = 'emadaaris.accessToken';
 const REFRESH_KEY = 'emadaaris.refreshToken';
@@ -113,6 +114,16 @@ export const apiDelete = (p) => api('delete', p);
  */
 export const SWEEP_TIMEOUT = 300000;
 export const apiSweep = (p, body) => api('post', p, body, undefined, SWEEP_TIMEOUT);
+
+/**
+ * A sweep that ran past SWEEP_TIMEOUT is not a sweep that failed — the server is still walking the
+ * tables. Saying so keeps nobody from reading a slow wipe or restore as a crash and running it twice.
+ */
+export const sweepFailure = (error) => (error.timedOut
+  ? i18n.t('sections.sweepTimedOut', {
+    defaultValue: 'The server is still working on this — the change may already be applied. Refresh and check the recycle bin before you run it again.',
+  })
+  : error.message);
 
 /** Multipart POST (axios sets the boundary when the body is FormData). */
 export const apiUpload = (p, formData, onUploadProgress) => http.post(p, formData, { onUploadProgress })

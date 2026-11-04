@@ -7,7 +7,7 @@ import {
   BadgeCheck, School, DatabaseBackup, Recycle, ShieldAlert, Trash2, Loader2, CalendarDays,
 } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
-import { apiSweep } from '../../api/client.js';
+import { apiSweep, sweepFailure } from '../../api/client.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
 import { PageHeader, StatCard, Spinner, ErrorState, EmptyState, money, dateOnly } from '../../components/ui/Basics.jsx';
@@ -45,7 +45,7 @@ export default function SchoolAdminDashboard() {
       }));
       reload();
     } catch (e) {
-      toast.error(e.timedOut ? t('sections.sweepTimedOut', { defaultValue: 'The server is still working on this — the data may already be cleared. Check the recycle bin before you try again.' }) : e.message);
+      toast.error(sweepFailure(e));
     } finally { setClearing(false); }
   };
 

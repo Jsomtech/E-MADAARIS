@@ -10,7 +10,7 @@ import { toast } from 'react-toastify';
 import {
   CalendarDays, Check, Clock, DoorOpen, Loader2, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X,
 } from 'lucide-react';
-import { apiDelete, apiPatch, apiPost, apiSweep } from '../../api/client.js';
+import { apiDelete, apiPatch, apiPost, apiSweep, sweepFailure } from '../../api/client.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { ConfirmDialog, Modal } from '../../components/ui/Modal.jsx';
@@ -857,7 +857,7 @@ function PeriodsModal({ open, periods, mayWrite, onClose, onChanged }) {
       setClearing(false);
       setClearText('');
       onChanged();
-    } catch (error) { toast.error(error.message); } finally { setBusy(false); }
+    } catch (error) { toast.error(sweepFailure(error)); } finally { setBusy(false); }
   };
 
   return (
@@ -1133,7 +1133,7 @@ function ClearTimetableModal({ open, rows, onClose, onCleared }) {
         rows: data?.rows ?? 0,
       }));
       onCleared();
-    } catch (error) { toast.error(error.message); } finally { setBusy(false); }
+    } catch (error) { toast.error(sweepFailure(error)); } finally { setBusy(false); }
   };
 
   return (

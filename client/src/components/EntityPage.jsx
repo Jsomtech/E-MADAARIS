@@ -9,7 +9,7 @@ import { PageHeader, Spinner } from './ui/Basics.jsx';
 import StudentFormModal from '../pages/school/StudentFormModal.jsx';
 import StudentImportModal from './students/StudentImportModal.jsx';
 import { useApi } from '../hooks/useApi.js';
-import { apiGet, apiPost, apiPatch, apiDelete, apiSweep, downloadFile } from '../api/client.js';
+import { apiGet, apiPost, apiPatch, apiDelete, apiSweep, sweepFailure, downloadFile } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { humanize, resourceConfig } from '../config/resources.jsx';
 
@@ -271,7 +271,7 @@ export default function EntityPage({ config, title, subtitle, defaultFilters = {
       setClearText('');
       invalidateOptionCache();
       list.reload();
-    } catch (error) { toast.error(error.message); } finally { setClearing(false); }
+    } catch (error) { toast.error(sweepFailure(error)); } finally { setClearing(false); }
   }, [config, clearText, list, t]);
 
   const filterDefs = Object.entries(config.filter || {});

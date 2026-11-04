@@ -9,7 +9,7 @@ import {
   Pencil, PlayCircle, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users, Wallet,
 } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
-import { apiDelete, apiPatch, apiPost, apiSweep } from '../../api/client.js';
+import { apiDelete, apiPatch, apiPost, apiSweep, sweepFailure } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import Field from '../../components/ui/Field.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
@@ -655,7 +655,7 @@ function ClearDataModal({ row, onClose, onSaved }) {
       }));
       onSaved();
     } catch (error) {
-      toast.error(error.timedOut ? t('sections.sweepTimedOut', { defaultValue: 'The server is still working on this — the data may already be cleared. Check the recycle bin before you try again.' }) : error.message);
+      toast.error(sweepFailure(error));
     } finally { setBusy(false); }
   }, [row, confirmName, onSaved, t]);
 

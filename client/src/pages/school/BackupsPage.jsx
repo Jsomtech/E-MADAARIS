@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
 import { DatabaseBackup, Download, RefreshCw, ShieldAlert, Trash2, Loader2 } from 'lucide-react';
-import { apiGet, apiPost, apiSweep, downloadFile } from '../../api/client.js';
+import { apiGet, apiSweep, sweepFailure, downloadFile } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import { Badge, ErrorState, PageHeader, StatCard, dateTime } from '../../components/ui/Basics.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -43,14 +43,14 @@ export default function BackupsPage() {
   const runBackup = async () => {
     setBusy(true);
     try {
-      const result = await apiPost('/school/backups');
+      const result = await apiSweep('/school/backups');
       toast.success(t('sections.backupCreated', {
         defaultValue: 'Backup created · {{rows}} rows ({{size}})',
         rows: result.data?.totalRows ?? 0, size: kb(result.data?.sizeBytes),
       }));
       setPage(1);
       load();
-    } catch (e) { toast.error(e.message); } finally { setBusy(false); }
+    } catch (e) { toast.error(sweepFailure(e)); } finally { setBusy(false); }
   };
 
   const clearData = async () => {
@@ -72,7 +72,7 @@ export default function BackupsPage() {
       setPage(1);
       load();
     } catch (e) {
-      toast.error(e.timedOut ? t('sections.sweepTimedOut', { defaultValue: 'The server is still working on this — the data may already be cleared. Check the recycle bin before you try again.' }) : e.message);
+      toast.error(sweepFailure(e));
     } finally { setClearing(false); }
   };
 

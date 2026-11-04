@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
 import { DatabaseBackup, Download, RefreshCw, ShieldAlert, Play, Loader2 } from 'lucide-react';
-import { apiGet, apiPost, apiSweep, downloadFile } from '../../api/client.js';
+import { apiGet, apiPost, apiSweep, sweepFailure, downloadFile } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import { Badge, ErrorState, PageHeader, StatCard, dateTime } from '../../components/ui/Basics.jsx';
 
@@ -58,28 +58,28 @@ export default function BackupsPage() {
   const runRound = async () => {
     setBusy(true);
     try {
-      const res = await apiPost('/platform/backups/run');
+      const res = await apiSweep('/platform/backups/run');
       const result = res.data?.lastResult;
       toast.success(t('sections.backupRoundDone', {
         defaultValue: 'Backup round: {{created}} created, {{skipped}} unchanged, {{failed}} failed.',
         created: result?.created ?? 0, skipped: result?.skipped ?? 0, failed: result?.failed ?? 0,
       }));
       load();
-    } catch (e) { toast.error(e.message); } finally { setBusy(false); }
+    } catch (e) { toast.error(sweepFailure(e)); } finally { setBusy(false); }
   };
 
   const backupSchool = async () => {
     if (!selected) return;
     setBusy(true);
     try {
-      const res = await apiPost('/platform/backups/run', { school_id: selected.id });
+      const res = await apiSweep('/platform/backups/run', { school_id: selected.id });
       toast.success(t('sections.backupCreated', {
         defaultValue: 'Backup created · {{rows}} rows ({{size}})',
         rows: res.data?.totalRows ?? 0, size: kb(res.data?.sizeBytes),
       }));
       setPage(1);
       load();
-    } catch (e) { toast.error(e.message); } finally { setBusy(false); }
+    } catch (e) { toast.error(sweepFailure(e)); } finally { setBusy(false); }
   };
 
   const clearSchool = async () => {
@@ -94,7 +94,7 @@ export default function BackupsPage() {
       setConfirmName('');
       load();
     } catch (e) {
-      toast.error(e.timedOut ? t('sections.sweepTimedOut', { defaultValue: 'The server is still working on this — the data may already be cleared. Check the recycle bin before you try again.' }) : e.message);
+      toast.error(sweepFailure(e));
     } finally { setClearing(false); }
   };
 

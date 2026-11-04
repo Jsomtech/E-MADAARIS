@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
 import { RefreshCw, Search, Trash2, RotateCcw, Recycle } from 'lucide-react';
-import { apiGet, apiPost, apiDelete, apiSweep } from '../../api/client.js';
+import { apiGet, apiDelete, apiSweep, sweepFailure } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import { ConfirmDialog } from '../../components/ui/Modal.jsx';
 import { Badge, EmptyState, ErrorState, PageHeader, dateTime } from '../../components/ui/Basics.jsx';
@@ -51,7 +51,7 @@ export default function TrashPage() {
       await apiSweep(`/school/trash/${row.id}/restore`);
       toast.success(t('sections.trashRestored', { defaultValue: '“{{name}}” was restored', name: row.label }));
       load();
-    } catch (e) { toast.error(e.message); } finally { setBusy(false); }
+    } catch (e) { toast.error(sweepFailure(e)); } finally { setBusy(false); }
   };
 
   const confirmAction = async () => {
@@ -59,7 +59,7 @@ export default function TrashPage() {
     setBusy(true);
     try {
       if (confirm.kind === 'empty') {
-        const body = await apiPost('/school/trash/empty');
+        const body = await apiSweep('/school/trash/empty');
         toast.success(t('sections.trashEmptied', { defaultValue: '{{count}} item(s) permanently removed', count: body.data?.purged ?? 0 }));
       } else {
         await apiDelete(`/school/trash/${confirm.row.id}`);
@@ -67,7 +67,7 @@ export default function TrashPage() {
       }
       setConfirm(null);
       load();
-    } catch (e) { toast.error(e.message); } finally { setBusy(false); }
+    } catch (e) { toast.error(sweepFailure(e)); } finally { setBusy(false); }
   };
 
   const columns = useMemo(() => [
