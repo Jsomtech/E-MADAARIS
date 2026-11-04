@@ -9,7 +9,7 @@ import { PageHeader, Spinner } from './ui/Basics.jsx';
 import StudentFormModal from '../pages/school/StudentFormModal.jsx';
 import StudentImportModal from './students/StudentImportModal.jsx';
 import { useApi } from '../hooks/useApi.js';
-import { apiGet, apiPost, apiPatch, apiDelete, downloadFile } from '../api/client.js';
+import { apiGet, apiPost, apiPatch, apiDelete, apiSweep, downloadFile } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { humanize, resourceConfig } from '../config/resources.jsx';
 
@@ -262,7 +262,7 @@ export default function EntityPage({ config, title, subtitle, defaultFilters = {
   const clearAll = useCallback(async () => {
     setClearing(true);
     try {
-      const body = await apiPost(`${config.api}/delete-all`, { confirm: clearText });
+      const body = await apiSweep(`${config.api}/delete-all`, { confirm: clearText });
       toast.success(t('sections.sectionCleared', {
         defaultValue: 'Deleted {{rows}} rows. They stay restorable in the recycle bin.',
         rows: body.data?.rows ?? 0,

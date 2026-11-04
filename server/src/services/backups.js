@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { db } from '../config/supabase.js';
 import { env } from '../config/env.js';
 import { logger } from '../middleware/error.js';
+import { readScopedRows } from './schoolData.js';
+import { PARENT_SCOPED_TABLES } from './schoolTables.js';
 
 /**
  * School data backups stored in append-only audit_logs (no extra migration needed):
@@ -76,6 +78,13 @@ export async function hydrateAutoBackupState() {
 
 async function readTable(table, schoolId) {
   const limit = rowLimit(table);
+  // Four election tables are children of a row that carries the school id, so they cannot be
+  // read with a school_id filter — see PARENT_SCOPED_TABLES.
+  if (PARENT_SCOPED_TABLES[table]) {
+    const scoped = await readScopedRows(table, schoolId, { limit });
+    if (scoped.error) return { error: scoped.error.message };
+    return { rows: scoped.rows, truncated: Boolean(scoped.truncated) || scoped.rows.length >= limit };
+  }
   let q = db().from(table).select('*').eq('school_id', schoolId).limit(limit);
   const { data, error } = await q.order('id');
   if (error) return { error: error.message };

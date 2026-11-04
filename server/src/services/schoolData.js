@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../config/supabase.js';
 import { ApiError } from '../middleware/error.js';
 import { TRASH_MODULE, sanitizeSnapshot } from './trash.js';
-import { CLEAR_TABLES } from './schoolTables.js';
+import { CLEAR_TABLES, PARENT_SCOPED_TABLES } from './schoolTables.js';
 
 /**
  * Business data wiped by the danger-zone "clear data" action.
@@ -34,6 +34,66 @@ async function readAllRows(table, schoolId) {
   return { rows };
 }
 
+/** PostgREST puts an `in` list in the request URL, so parent ids are walked a block at a time. */
+const ID_BLOCK = 100;
+
+/** The parent rows this school owns — the only handle a parent-scoped child table has. */
+async function parentIds(table, schoolId) {
+  const scope = PARENT_SCOPED_TABLES[table];
+  const { data, error } = await db().from(scope.parent).select('id').eq('school_id', schoolId)
+    .order('id').limit(10000);
+  if (error) return { error };
+  return { ids: (data || []).map((row) => row.id) };
+}
+
+/** Rows of a child table that belongs to the school through a parent, optionally capped. */
+export async function readScopedRows(table, schoolId, { limit = null } = {}) {
+  const scope = PARENT_SCOPED_TABLES[table];
+  const { ids, error } = await parentIds(table, schoolId);
+  if (error) return { error };
+  const cap = limit ?? Infinity;
+  const rows = [];
+  let truncated = false;
+  for (let i = 0; i < ids.length && !truncated; i += ID_BLOCK) {
+    let from = 0;
+    for (;;) {
+      const { data, error: readError } = await db().from(table).select('*')
+        .in(scope.column, ids.slice(i, i + ID_BLOCK)).order('id').range(from, from + PAGE - 1);
+      if (readError) return { error: readError };
+      const batch = data || [];
+      if (rows.length + batch.length > cap) {
+        rows.push(...batch.slice(0, Math.max(0, cap - rows.length)));
+        truncated = true;
+        break;
+      }
+      rows.push(...batch);
+      if (!batch.length) break;
+      from += batch.length;
+    }
+  }
+  return { rows, truncated };
+}
+
+/** Every row of one tenant table, whether it carries a school id or hangs off a parent. */
+export async function readSchoolRows(table, schoolId) {
+  if (PARENT_SCOPED_TABLES[table]) return readScopedRows(table, schoolId);
+  return readAllRows(table, schoolId);
+}
+
+/** Delete this school's rows in one table, keeping the 42P01 answer the callers skip on. */
+export async function deleteSchoolRows(table, schoolId) {
+  if (!PARENT_SCOPED_TABLES[table]) return db().from(table).delete().eq('school_id', schoolId);
+  const scope = PARENT_SCOPED_TABLES[table];
+  const { ids, error } = await parentIds(table, schoolId);
+  if (error) return { error };
+  for (let i = 0; i < ids.length; i += ID_BLOCK) {
+    const { error: deleteError } = await db().from(table).delete()
+      .in(scope.column, ids.slice(i, i + ID_BLOCK));
+    if (deleteError) return { error: deleteError };
+  }
+  return { error: null };
+}
+
 async function recordBulkSnapshot(schoolId, bulk, rowCount, actor = {}, { label, table = '__all__', module = 'school' } = {}) {
   const id = randomUUID();
   const labelText = label || `All school data (${rowCount} rows)`;
@@ -54,20 +114,31 @@ async function recordBulkSnapshot(schoolId, bulk, rowCount, actor = {}, { label,
   return id;
 }
 
-/** Read every tenant table into one bulk snapshot map (reused by clear-all and section clears). */
+/**
+ * Read every tenant table into one bulk snapshot map (reused by clear-all and section clears).
+ *
+ * Eighty-two tables against a hosted database is eighty-two round trips, which at a half second
+ * each is longer than any browser is willing to wait. The reads are independent, so they run eight
+ * at a time — the same ceiling the backup scheduler uses — and a clear finishes in seconds.
+ */
+const READ_BATCH = 8;
+
 async function collectSchoolSnapshot(schoolId) {
   let rowCount = 0;
   const bulk = {};
-  for (const table of CLEAR_TABLES) {
-    const result = await readAllRows(table, schoolId);
-    if (result.error) {
+  for (let i = 0; i < CLEAR_TABLES.length; i += READ_BATCH) {
+    const batch = CLEAR_TABLES.slice(i, i + READ_BATCH);
+    const results = await Promise.all(batch.map(async (table) => ({ table, ...(await readSchoolRows(table, schoolId)) })));
+    for (const result of results) {
       // 42P01 = optional migration not applied: nothing to read or clear there.
-      if (result.error.code === '42P01') continue;
-      throw new ApiError(500, `Could not snapshot ${table} before clearing: ${result.error.message}`);
-    }
-    if (result.rows.length) {
-      bulk[table] = result.rows.map((row) => sanitizeSnapshot(table, row));
-      rowCount += result.rows.length;
+      if (result.error) {
+        if (result.error.code === '42P01') continue;
+        throw new ApiError(500, `Could not snapshot ${result.table} before clearing: ${result.error.message}`);
+      }
+      if (result.rows.length) {
+        bulk[result.table] = result.rows.map((row) => sanitizeSnapshot(result.table, row));
+        rowCount += result.rows.length;
+      }
     }
   }
   return { bulk, rowCount };
@@ -92,8 +163,13 @@ export async function clearSchoolData(schoolId, { actor = {}, snapshot = true } 
 
   let cleared = 0;
   const failures = [];
-  for (const table of CLEAR_TABLES) {
-    const { error } = await db().from(table).delete().eq('school_id', schoolId);
+  // A table the snapshot found empty is already clear, so it is not worth a round trip. The
+  // children-before-parents order of CLEAR_TABLES still decides which tables are visited first.
+  const targets = snapshot
+    ? CLEAR_TABLES.filter((table) => bulk[table]?.length)
+    : CLEAR_TABLES;
+  for (const table of targets) {
+    const { error } = await deleteSchoolRows(table, schoolId);
     if (error && error.code !== '42P01') {
       failures.push(`${table}: ${error.message}`);
       continue;
@@ -114,7 +190,7 @@ export async function clearSchoolData(schoolId, { actor = {}, snapshot = true } 
 export async function clearTableData(table, schoolId, { actor = {}, label, module } = {}) {
   if (!CLEAR_TABLES.includes(table)) throw new ApiError(400, 'This section cannot be cleared in bulk');
 
-  const read = await readAllRows(table, schoolId);
+  const read = await readSchoolRows(table, schoolId);
   if (read.error) throw new ApiError(500, `Could not read ${table} before clearing: ${read.error.message}`);
   const rows = read.rows;
   if (!rows.length) return { table, rows: 0, snapshotId: null };
@@ -125,7 +201,7 @@ export async function clearTableData(table, schoolId, { actor = {}, label, modul
     label: labelText, table, module: module || 'school',
   });
 
-  const { error } = await db().from(table).delete().eq('school_id', schoolId);
+  const { error } = await deleteSchoolRows(table, schoolId);
   if (error) {
     // Roll the orphan snapshot back; nothing was deleted, so nothing belongs in the bin.
     await db().from('audit_logs').delete().eq('id', snapshotId).eq('module', TRASH_MODULE);

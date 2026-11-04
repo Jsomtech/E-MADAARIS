@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
 import { DatabaseBackup, Download, RefreshCw, ShieldAlert, Play, Loader2 } from 'lucide-react';
-import { apiGet, apiPost, downloadFile } from '../../api/client.js';
+import { apiGet, apiPost, apiSweep, downloadFile } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import { Badge, ErrorState, PageHeader, StatCard, dateTime } from '../../components/ui/Basics.jsx';
 
@@ -86,14 +86,16 @@ export default function BackupsPage() {
     if (!selected) return;
     setClearing(true);
     try {
-      const res = await apiPost(`/platform/schools/${selected.id}/clear-data`, { confirm: confirmName });
+      const res = await apiSweep(`/platform/schools/${selected.id}/clear-data`, { confirm: confirmName });
       toast.success(t('sections.dataClearedRecoverable', {
         defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} accounts). It stays restorable in the recycle bin.',
         tables: res.data?.tables ?? 0, rows: res.data?.rows ?? 0, users: res.data?.users ?? 0,
       }));
       setConfirmName('');
       load();
-    } catch (e) { toast.error(e.message); } finally { setClearing(false); }
+    } catch (e) {
+      toast.error(e.timedOut ? t('sections.sweepTimedOut', { defaultValue: 'The server is still working on this — the data may already be cleared. Check the recycle bin before you try again.' }) : e.message);
+    } finally { setClearing(false); }
   };
 
   const columns = useMemo(() => [

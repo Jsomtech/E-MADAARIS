@@ -10,7 +10,7 @@ import { toast } from 'react-toastify';
 import {
   CalendarDays, Check, Clock, DoorOpen, Loader2, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X,
 } from 'lucide-react';
-import { apiDelete, apiPatch, apiPost } from '../../api/client.js';
+import { apiDelete, apiPatch, apiPost, apiSweep } from '../../api/client.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { ConfirmDialog, Modal } from '../../components/ui/Modal.jsx';
@@ -849,7 +849,7 @@ function PeriodsModal({ open, periods, mayWrite, onClose, onChanged }) {
   const clearAll = async () => {
     setBusy(true);
     try {
-      const { data } = await apiPost('/timetable-periods/delete-all', { confirm: clearText });
+      const { data } = await apiSweep('/timetable-periods/delete-all', { confirm: clearText });
       toast.success(t('sections.periodsCleared', {
         defaultValue: 'Deleted {{rows}} periods and their lessons. The recycle bin keeps a restorable snapshot.',
         rows: data?.rows ?? 0,
@@ -1127,7 +1127,7 @@ function ClearTimetableModal({ open, rows, onClose, onCleared }) {
   const submit = async () => {
     setBusy(true);
     try {
-      const { data } = await apiPost('/timetable-entries/delete-all', { confirm: text });
+      const { data } = await apiSweep('/timetable-entries/delete-all', { confirm: text });
       toast.success(t('sections.sectionCleared', {
         defaultValue: 'Deleted {{rows}} rows from this section. The recycle bin keeps a restorable snapshot.',
         rows: data?.rows ?? 0,

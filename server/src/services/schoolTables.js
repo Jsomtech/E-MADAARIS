@@ -39,3 +39,16 @@ export const CLEAR_TABLES = [
 ];
 
 export const RESTORE_ORDER = [...CLEAR_TABLES].reverse();
+
+/**
+ * Four election tables hang off a parent row instead of carrying a school id of their own, and the
+ * schema keeps them that way on purpose — a ballot selection stays a few joins away from any voter.
+ * Every tenant sweep here filters with `.eq('school_id', …)`, so those four are read and deleted
+ * through their parent instead, and the parent id list is taken before the parent rows go away.
+ */
+export const PARENT_SCOPED_TABLES = {
+  election_positions: { parent: 'elections', column: 'election_id' },
+  election_results: { parent: 'elections', column: 'election_id' },
+  election_ballot_selections: { parent: 'elections', column: 'election_id' },
+  candidate_manifestos: { parent: 'election_candidates', column: 'candidate_id' },
+};

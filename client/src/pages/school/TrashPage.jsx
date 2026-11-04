@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
 import { RefreshCw, Search, Trash2, RotateCcw, Recycle } from 'lucide-react';
-import { apiGet, apiPost, apiDelete } from '../../api/client.js';
+import { apiGet, apiPost, apiDelete, apiSweep } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import { ConfirmDialog } from '../../components/ui/Modal.jsx';
 import { Badge, EmptyState, ErrorState, PageHeader, dateTime } from '../../components/ui/Basics.jsx';
@@ -48,7 +48,7 @@ export default function TrashPage() {
   const restore = async (row) => {
     setBusy(true);
     try {
-      await apiPost(`/school/trash/${row.id}/restore`);
+      await apiSweep(`/school/trash/${row.id}/restore`);
       toast.success(t('sections.trashRestored', { defaultValue: '“{{name}}” was restored', name: row.label }));
       load();
     } catch (e) { toast.error(e.message); } finally { setBusy(false); }

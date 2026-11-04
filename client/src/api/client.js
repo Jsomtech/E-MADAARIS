@@ -82,9 +82,9 @@ http.interceptors.response.use(
 );
 
 /** Unwraps the API envelope: every endpoint answers { data } or { data, total, page } */
-export async function api(method, path, body, params) {
+export async function api(method, path, body, params, timeout) {
   try {
-    const res = await http({ method, url: path, data: body, params });
+    const res = await http({ method, url: path, data: body, params, timeout });
     return res.data;
   } catch (error) {
     const payload = error.response?.data;
@@ -92,6 +92,9 @@ export async function api(method, path, body, params) {
     const err = new Error(message);
     err.status = error.response?.status;
     err.details = payload?.details;
+    // A request that stopped answering is not a request that failed: the server carries on.
+    // Callers that wiped or restored data use this to warn before anyone clicks twice.
+    err.timedOut = !error.response && /timeout of \d+ms exceeded|ECONNABORTED/i.test(`${error.code || ''} ${error.message || ''}`);
     throw err;
   }
 }
@@ -101,6 +104,15 @@ export const apiPost = (p, body) => api('post', p, body);
 export const apiPatch = (p, body) => api('patch', p, body);
 export const apiPut = (p, body) => api('put', p, body);
 export const apiDelete = (p) => api('delete', p);
+
+/**
+ * A danger-zone sweep — "delete all school data", a bulk restore, a section delete-all — walks
+ * every tenant table of a hosted database, one round trip each. That is minutes on a school with
+ * attendance history, and the 45 s ceiling above cut it off with "Request failed" while the server
+ * carried on wiping behind the closed dialog.
+ */
+export const SWEEP_TIMEOUT = 300000;
+export const apiSweep = (p, body) => api('post', p, body, undefined, SWEEP_TIMEOUT);
 
 /** Multipart POST (axios sets the boundary when the body is FormData). */
 export const apiUpload = (p, formData, onUploadProgress) => http.post(p, formData, { onUploadProgress })

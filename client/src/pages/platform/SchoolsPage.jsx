@@ -9,7 +9,7 @@ import {
   Pencil, PlayCircle, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users, Wallet,
 } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
-import { apiDelete, apiPatch, apiPost } from '../../api/client.js';
+import { apiDelete, apiPatch, apiPost, apiSweep } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import Field from '../../components/ui/Field.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
@@ -648,13 +648,15 @@ function ClearDataModal({ row, onClose, onSaved }) {
   const submit = useCallback(async () => {
     setBusy(true);
     try {
-      const { data } = await apiPost(`/platform/schools/${row.id}/clear-data`, { confirm: confirmName });
+      const { data } = await apiSweep(`/platform/schools/${row.id}/clear-data`, { confirm: confirmName });
       toast.success(t('sections.dataClearedRecoverable', {
         defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} accounts). It stays restorable in the recycle bin.',
         tables: data?.tables ?? 0, rows: data?.rows ?? 0, users: data?.users ?? 0,
       }));
       onSaved();
-    } catch (error) { toast.error(error.message); } finally { setBusy(false); }
+    } catch (error) {
+      toast.error(error.timedOut ? t('sections.sweepTimedOut', { defaultValue: 'The server is still working on this — the data may already be cleared. Check the recycle bin before you try again.' }) : error.message);
+    } finally { setBusy(false); }
   }, [row, confirmName, onSaved, t]);
 
   return (
