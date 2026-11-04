@@ -68,7 +68,7 @@ export default function EntityPage({ config, title, subtitle, defaultFilters = {
   const exportType = exportTypeProp || config.exportType;
   const { t } = useTranslation();
   const { can, profile } = useAuth();
-  const tenantScope = profile?.schoolId || `platform:${profile?.userId || 'anonymous'}`;
+  const tenantScope = profile?.school?.id || `platform:${profile?.userId || 'anonymous'}`;
   const roles = profile?.roles?.length ? profile.roles : [profile?.primaryRole].filter(Boolean);
   const isPortalAccount = roles.length > 0 && roles.every((r) => r === 'student' || r === 'parent');
   const portal = useApi('/school/me/students', undefined, isPortalAccount);

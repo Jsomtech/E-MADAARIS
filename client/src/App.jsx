@@ -69,7 +69,7 @@ export default function App() {
   const { profile } = useAuth();
   // A new sign-in (different user or school) must remount the whole tree so no
   // component state from the previous tenant survives in this tab.
-  const sessionScope = profile ? `${profile.schoolId || 'platform'}:${profile.userId || profile.email || ''}` : 'public';
+  const sessionScope = profile ? `${profile.school?.id || 'platform'}:${profile.userId || profile.email || ''}` : 'public';
   return (
     <Suspense key={sessionScope} fallback={<div className="p-5 text-center"><Spinner /></div>}>
       <Routes>

@@ -31,24 +31,24 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('emadaaris:signed-out', onSignedOut);
   }, []);
 
-  const login = useCallback(async (email, password) => {
+  const login = useCallback(async (email, password, { remember = false } = {}) => {
     const { data } = await apiPost('/auth/login', { email, password });
-    tokens.set(data.tokens);
+    tokens.set(data.tokens, { remember });
     setProfile(data.profile);
     setError(null);
     return data.profile;
   }, []);
 
-  const loginStudent = useCallback(async (studentId, password) => {
+  const loginStudent = useCallback(async (studentId, password, { remember = false } = {}) => {
     const { data } = await apiPost('/auth/student-login', { student_id: studentId, password });
-    tokens.set(data.tokens);
+    tokens.set(data.tokens, { remember });
     setProfile(data.profile);
     setError(null);
     return data.profile;
   }, []);
 
   const adoptSession = useCallback(async ({ accessToken, refreshToken }) => {
-    tokens.set({ accessToken, refreshToken });
+    tokens.set({ accessToken, refreshToken }, { remember: true });
     const { data } = await apiGet('/auth/me');
     setProfile(data);
     return data;

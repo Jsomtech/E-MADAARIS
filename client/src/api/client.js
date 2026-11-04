@@ -3,14 +3,40 @@ import axios from 'axios';
 const ACCESS_KEY = 'emadaaris.accessToken';
 const REFRESH_KEY = 'emadaaris.refreshToken';
 
+/**
+ * Two storage tiers:
+ *  - sessionStorage — the default. The session belongs to one tab, so opening a
+ *    second tab asks for credentials instead of reusing the first dashboard.
+ *  - localStorage — only when the user ticks "keep me signed in". Shared by every
+ *    tab of this browser, which is the behaviour they opted into.
+ * sessionStorage is read first, so a tab that signed in on its own is never
+ * shadowed by an older browser-wide token.
+ */
 export const tokens = {
-  get access() { return localStorage.getItem(ACCESS_KEY); },
-  get refresh() { return localStorage.getItem(REFRESH_KEY); },
-  set({ accessToken, refreshToken }) {
-    if (accessToken) localStorage.setItem(ACCESS_KEY, accessToken);
-    if (refreshToken) localStorage.setItem(REFRESH_KEY, refreshToken);
+  get access() { return sessionStorage.getItem(ACCESS_KEY) || localStorage.getItem(ACCESS_KEY); },
+  get refresh() { return sessionStorage.getItem(REFRESH_KEY) || localStorage.getItem(REFRESH_KEY); },
+  set({ accessToken, refreshToken }, { remember } = {}) {
+    // An explicit `remember` picks the tier at sign-in. Without it the token is
+    // rewritten where it already lives — that is what a silent refresh must do,
+    // otherwise one tab's refresh would overwrite another tab's session.
+    const store = remember === undefined
+      ? (sessionStorage.getItem(ACCESS_KEY) ? sessionStorage : localStorage)
+      : (remember ? localStorage : sessionStorage);
+    // A remembered session supersedes this tab's own tab-scoped token. localStorage
+    // is never cleared here: every tab shares it and another tab may be signed in.
+    if (remember === true) {
+      sessionStorage.removeItem(ACCESS_KEY);
+      sessionStorage.removeItem(REFRESH_KEY);
+    }
+    if (accessToken) store.setItem(ACCESS_KEY, accessToken);
+    if (refreshToken) store.setItem(REFRESH_KEY, refreshToken);
   },
-  clear() { localStorage.removeItem(ACCESS_KEY); localStorage.removeItem(REFRESH_KEY); },
+  clear() {
+    for (const store of [sessionStorage, localStorage]) {
+      store.removeItem(ACCESS_KEY);
+      store.removeItem(REFRESH_KEY);
+    }
+  },
 };
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';

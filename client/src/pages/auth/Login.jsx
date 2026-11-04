@@ -12,7 +12,7 @@ import BrandLogo from '../../components/brand/BrandLogo.jsx';
 /** Public sign-in: authenticates through the API and routes the user to its own dashboard. */
 export default function Login() {
   const { t } = useTranslation();
-  const { login, loginStudent, isAuthenticated, profile } = useAuth();
+  const { login, loginStudent, logout, isAuthenticated, profile } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -22,6 +22,7 @@ export default function Login() {
   const [studentId, setStudentId] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -42,10 +43,12 @@ export default function Login() {
     setBusy(true);
     try {
       const signedIn = mode === 'student'
-        ? await loginStudent(identifier, password)
-        : await login(identifier, password);
+        ? await loginStudent(identifier, password, { remember })
+        : await login(identifier, password, { remember });
       toast.success(t('auth.welcome', { defaultValue: 'Welcome back' }));
-      navigate(signedIn?.dashboardRoute || from, { replace: true });
+      // A deep link the tab was blocked on wins over the role's own dashboard,
+      // so signing in from a new tab lands where the user actually meant to go.
+      navigate(location.state?.from || signedIn?.dashboardRoute || from, { replace: true });
     } catch (err) {
       const status = err.status;
       if (status === 403) {
@@ -60,6 +63,13 @@ export default function Login() {
         setError({ status, message: err.message });
       }
     } finally { setBusy(false); }
+  };
+
+  /** Drops this browser's session so a different account can sign in here. */
+  const switchAccount = async () => {
+    await logout();
+    setPassword('');
+    setError(null);
   };
 
   return (
@@ -165,6 +175,15 @@ export default function Login() {
               </div>
             </div>
 
+            <label className="login-remember">
+              <input className="form-check-input" type="checkbox" checked={remember}
+                onChange={(e) => setRemember(e.target.checked)} />
+              <span>
+                {t('auth.rememberMe', { defaultValue: 'Keep me signed in on this computer' })}
+                <em>{t('auth.rememberMeHint', { defaultValue: 'Unchecked: only this tab stays signed in, so another tab can open a different account.' })}</em>
+              </span>
+            </label>
+
             <button type="submit" className="login-submit" disabled={busy}>
               {busy
                 ? <><Loader2 size={17} className="animate-spin" /> {t('common.loading', { defaultValue: 'Signing in…' })}</>
@@ -176,10 +195,13 @@ export default function Login() {
             <div className="login-alert info mt-3">
               <CheckCircle2 size={17} className="flex-shrink-0" />
               <div className="small">
-                {t('login.alreadySignedIn', { defaultValue: 'You are already signed in as' })} <b>{profile?.fullName || profile?.email}</b>.{' '}
-                <Link to={profile?.dashboardRoute || '/dashboard'} className="login-inline-link">
+                {t('auth.alreadySignedIn', { defaultValue: 'You are already signed in as' })} <b>{profile?.fullName || profile?.email}</b>{t('auth.inThisTab', { defaultValue: ' in this tab' })}.{' '}
+                <Link to={location.state?.from || profile?.dashboardRoute || '/dashboard'} className="login-inline-link">
                   {t('public.openDashboard', { defaultValue: 'Open dashboard' })} →
-                </Link>
+                </Link>{' '}
+                <button type="button" className="login-inline-link border-0 bg-transparent p-0" onClick={switchAccount}>
+                  {t('auth.useAnotherAccount', { defaultValue: 'or sign in as another account' })}
+                </button>
               </div>
             </div>
           ) : null}
