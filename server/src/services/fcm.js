@@ -141,8 +141,8 @@ function buildMessage(token, { title, body, link, tag, icon, priority }) {
           title: text(title),
           body: text(body),
           tag: text(tag, 'general'),
-          icon: text(icon, '/icons/icon-192.png'),
-          badge: text(icon, '/icons/icon-192.png'),
+          icon: linkUrl(text(icon, '/icon-192.png')),
+          badge: linkUrl(text(icon, '/icon-192.png')),
         },
         fcmOptions: { link: linkUrl(link) },
       },
@@ -151,7 +151,10 @@ function buildMessage(token, { title, body, link, tag, icon, priority }) {
 }
 
 async function sendOne(bearer, token, payload) {
-  const url = `https://fcm.googleapis.com/v1/projects/${credentials.projectId}/messages/${token}`;
+  // The v1 endpoint is a fixed `messages:send` route; the device token travels inside the body.
+  // Naming the token in the path makes FCM look it up as a message resource and answer 404, which
+  // this file would then read as an unregistered device and drop the registration.
+  const url = `https://fcm.googleapis.com/v1/projects/${credentials.projectId}/messages:send`;
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -278,9 +281,9 @@ export async function sendPushToUsers(userIds, {
     );
   }
   return {
-    attempted: tokens.length,
+    attempted: devices.length,
     sent,
-    failed: tokens.length - sent,
+    failed: devices.length - sent,
     skipped: null,
     error: results.find((r) => !r.ok && !r.stale)?.detail || null,
   };
