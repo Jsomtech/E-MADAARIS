@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import multer from 'multer';
 import { z } from 'zod';
 import { db, requireDb } from '../config/supabase.js';
@@ -14,6 +14,7 @@ import { IMAGE_MIME, sniffImage } from '../core/images.js';
 import { credentialFlags, getIssuedCredential, setIssuedCredential } from '../services/credentialVault.js';
 import { createBackup, listBackups, getBackupPayload } from '../services/backups.js';
 import { clearSchoolData } from '../services/schoolData.js';
+import { reclaimIdentity, temporaryPassword } from '../services/authIdentity.js';
 import { env } from '../config/env.js';
 
 export const schoolRouter = Router();
@@ -526,16 +527,35 @@ schoolRouter.post('/users/invite', requirePermission('users.create', 'users.invi
 
     const { data: link, error } = await supabase.auth.admin.generateLink({
       type: 'invite', email: body.email,
-      options: { data: { full_name: body.full_name, school_id: req.auth.schoolId, role: body.role }, redirectTo: `${env.frontendUrl}/auth/accept-invite` },
+      options: {
+        data: { full_name: body.full_name, school_id: req.auth.schoolId, role: body.role },
+        redirectTo: `${env.frontendUrl}/auth/accept-invite`,
+      },
     });
+    let authUserId = link?.user?.id || null;
+    let invitationLink = link?.properties?.action_link || null;
+    let temporary = null;
     if (error) {
-      if (error.message.includes('already')) throw new ApiError(409, 'An account with this email already exists');
-      throw new ApiError(500, error.message);
+      if (!error.message.includes('already')) throw new ApiError(500, error.message);
+      // The address may belong to the shell of an account a wipe removed: the membership is gone but
+      // Supabase Auth still holds it, and it will not issue a second invitation to the same address.
+      // Reclaim the identity and hand it a password, the way a staff reset does.
+      temporary = temporaryPassword();
+      const reclaim = await reclaimIdentity({
+        email: body.email,
+        password: temporary,
+        metadata: { full_name: body.full_name, school_id: req.auth.schoolId, role: body.role },
+        mustChangePassword: true,
+      });
+      if (reclaim.status === 'failed') throw new ApiError(500, reclaim.error);
+      if (reclaim.status !== 'reclaimed') throw new ApiError(409, 'An account with this email already exists');
+      authUserId = reclaim.user.id;
     }
     const { data: su, error: e2 } = await supabase.from('school_users').insert({
-      school_id: req.auth.schoolId, auth_user_id: link.user.id,
+      school_id: req.auth.schoolId, auth_user_id: authUserId,
       full_name: body.full_name, email: body.email, phone: body.phone,
-      status: 'pending_verification',
+      status: temporary ? 'active' : 'pending_verification',
+      email_verified: Boolean(temporary),
     }).select().single();
     if (e2) throw new ApiError(500, e2.message);
     await assignRole(req.auth.schoolId, su.id, body.role);
@@ -543,16 +563,30 @@ schoolRouter.post('/users/invite', requirePermission('users.create', 'users.invi
       school_id: req.auth.schoolId, email: body.email, full_name: body.full_name,
       role_name: body.role, invited_by: req.auth.userId, last_sent_at: new Date().toISOString(), send_count: 1,
     });
+    if (temporary) {
+      try {
+        await setIssuedCredential(authUserId, { schoolId: req.auth.schoolId, membershipId: su.id, password: temporary });
+      } catch (credentialError) { req.log?.warn({ err: credentialError }, 'issued credential could not be sealed'); }
+    }
     await sendMail({
       to: body.email, template: 'staff_invitation',
       variables: {
         user_name: body.full_name, school_name: req.auth.school.school_name, role: body.role,
-        invitation_link: link.properties?.action_link || `${env.frontendUrl}/login`,
+        invitation_link: invitationLink || `${env.frontendUrl}/login`,
         expires_at: new Date(Date.now() + 7 * 86400000).toDateString(),
       },
     });
-    await audit(req, { module: 'users', action: 'invited', recordId: su.id, summary: `${body.email} as ${body.role}` });
-    res.status(201).json({ data: { user: su, activationLink: env.nodeEnv === 'development' ? link.properties?.action_link : undefined } });
+    await audit(req, {
+      module: 'users', action: 'invited', recordId: su.id,
+      summary: temporary ? `${body.email} as ${body.role} (leftover sign-in identity reclaimed)` : `${body.email} as ${body.role}`,
+    });
+    res.status(201).json({
+      data: {
+        user: su,
+        ...(temporary ? { temporaryPassword: temporary } : {}),
+        activationLink: env.nodeEnv === 'development' ? invitationLink : undefined,
+      },
+    });
   } catch (e) { next(e); }
 });
 
@@ -612,21 +646,35 @@ schoolRouter.post('/users', requirePermission('users.create'), async (req, res, 
       email_confirm: true,
       user_metadata: { full_name: body.full_name, school_id: schoolId, role: body.role },
     });
+    let authUserId = created?.user?.id || null;
+    let reclaimed = false;
     if (authError) {
       const duplicate = authError.code === 'email_exists' || /already|duplicate/i.test(authError.message);
-      throw new ApiError(duplicate ? 409 : 500, duplicate
-        ? 'An account with this email already exists. Use "Send invitation" for that person, or choose another email.'
-        : authError.message);
+      if (!duplicate) throw new ApiError(500, authError.message);
+      // A wipe deletes memberships but never the GoTrue identities behind them, so this address may be
+      // held by an account no school row points at. Reclaim it rather than refuse the email forever.
+      const reclaim = await reclaimIdentity({
+        email: body.email,
+        password: body.password,
+        metadata: { full_name: body.full_name, school_id: schoolId, role: body.role },
+      });
+      if (reclaim.status === 'failed') throw new ApiError(500, reclaim.error);
+      if (reclaim.status !== 'reclaimed') {
+        throw new ApiError(409, 'An account with this email already exists. Use "Send invitation" for that person, or choose another email.');
+      }
+      authUserId = reclaim.user.id;
+      reclaimed = true;
     }
 
     const { data: su, error: insertError } = await supabase.from('school_users').insert({
-      school_id: schoolId, auth_user_id: created.user.id,
+      school_id: schoolId, auth_user_id: authUserId,
       full_name: body.full_name, email: body.email, phone: body.phone,
       status: 'active', email_verified: true,
     }).select().single();
     if (insertError) {
-      // Roll back the auth identity so a failed insert cannot leave an orphan login behind.
-      await supabase.auth.admin.deleteUser(created.user.id);
+      // Roll back the auth identity so a failed insert cannot leave an orphan login behind — but never a
+      // reclaimed one: it was already stranded here, and deleting it would burn the address a second time.
+      if (!reclaimed) await supabase.auth.admin.deleteUser(authUserId);
       throw new ApiError(500, insertError.message);
     }
 
@@ -639,21 +687,12 @@ schoolRouter.post('/users', requirePermission('users.create'), async (req, res, 
     }
     // Keep the admin-set first password retrievable by an administrator; the owner's own change clears it.
     try {
-      await setIssuedCredential(created.user.id, { schoolId, membershipId: su.id, password: body.password });
+      await setIssuedCredential(authUserId, { schoolId, membershipId: su.id, password: body.password });
     } catch (error) { req.log?.warn({ err: error }, 'issued credential could not be sealed'); }
     await audit(req, { module: 'users', action: 'created', recordId: su.id, summary: `${body.email} as ${body.role} (password set by admin)` });
     res.status(201).json({ data: { user: su } });
   } catch (e) { next(e); }
 });
-
-/** Avoids look-alike characters so a temporary password survives being read out or copied by hand. */
-function temporaryPassword() {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-  const bytes = randomBytes(12);
-  let out = '';
-  for (let i = 0; i < 12; i += 1) out += alphabet[bytes[i] % alphabet.length];
-  return `Em${out}${randomInt(10, 100)}`;
-}
 
 // Passwords are one-way hashes in Supabase Auth; nobody — including the school administrator — can
 // read an existing one. This endpoint replaces it (admin-supplied or generated) and returns a

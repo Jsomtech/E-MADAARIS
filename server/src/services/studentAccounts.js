@@ -1,5 +1,6 @@
 import { db } from '../config/supabase.js';
 import { setIssuedCredential } from './credentialVault.js';
+import { findAuthUserByEmail } from './authIdentity.js';
 
 /**
  * Student logins are provisioned without asking for an email: the student ID is both the
@@ -34,19 +35,6 @@ export async function studentRoleId(schoolId) {
     .select('id').eq('school_id', schoolId).eq('name', 'student').maybeSingle();
   if (!data) throw new Error('The student role is missing for this school');
   return data.id;
-}
-
-/** Reuses an auth identity that already owns the derived address (retry after a partial failure). */
-async function findAuthUserByEmail(email) {
-  const supabase = db();
-  for (let page = 1; page <= 5; page += 1) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 });
-    if (error) return null;
-    const hit = (data?.users || []).find((u) => String(u.email || '').toLowerCase() === email.toLowerCase());
-    if (hit) return hit;
-    if ((data?.users || []).length < 200) return null;
-  }
-  return null;
 }
 
 function fullNameOf(student) {

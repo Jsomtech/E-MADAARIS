@@ -2,6 +2,7 @@ import { db } from '../config/supabase.js';
 import { DEFAULT_ROLE_PERMISSIONS, ROLE_NAMES } from '../config/roleDefaults.js';
 import { sendMail } from './mailer.js';
 import { setIssuedCredential } from './credentialVault.js';
+import { reclaimIdentity, temporaryPassword } from './authIdentity.js';
 import { ensureStandardGrades } from './standardGrades.js';
 import { env } from '../config/env.js';
 
@@ -92,59 +93,95 @@ export async function provisionSchool({ registration, adminUser }, { actor } = {
   const hasPassword = Boolean(registration.admin_password);
   let activationLink = null;
   let adminAuthUser = null;
+  let handedPassword = null;
+  const adminMetadata = { full_name: registration.admin_full_name, school_id: school.id, role: ROLE_NAMES.school_admin };
+  const inviteRedirect = `${env.frontendUrl}/auth/accept-invite`;
   if (hasPassword) {
     const { data: created, error } = await supabase.auth.admin.createUser({
       email: registration.admin_email,
       password: registration.admin_password,
       email_confirm: true,
-      user_metadata: { full_name: registration.admin_full_name, school_id: school.id, role: ROLE_NAMES.school_admin },
+      user_metadata: adminMetadata,
     });
     if (error) {
       const duplicate = error.code === 'email_exists' || /already/i.test(error.message);
-      throw Object.assign(
-        new Error(duplicate
-          ? 'An account with this administrator email already exists. Use a different email.'
-          : `Admin account creation failed: ${error.message}`),
-        { status: 409 },
-      );
+      if (!duplicate) throw Object.assign(new Error(`Admin account creation failed: ${error.message}`), { status: 500 });
+      // A school wipe leaves its sign-in identities in Auth even after the membership is gone, so this
+      // address may belong to an account nobody can reach. Take it over rather than refuse it forever.
+      const reclaim = await reclaimIdentity({
+        email: registration.admin_email,
+        password: registration.admin_password,
+        metadata: adminMetadata,
+      });
+      if (reclaim.status === 'failed') {
+        throw Object.assign(new Error(`Admin account creation failed: ${reclaim.error}`), { status: 500 });
+      }
+      if (reclaim.status !== 'reclaimed') {
+        throw Object.assign(new Error('An account with this administrator email already exists. Use a different email.'), { status: 409 });
+      }
+      adminAuthUser = reclaim.user;
+    } else {
+      adminAuthUser = created.user;
     }
-    adminAuthUser = created.user;
   } else {
     const { data: inviteData, error: inviteError } = await supabase.auth.admin.generateLink({
       type: 'invite',
       email: registration.admin_email,
       options: {
-        data: { full_name: registration.admin_full_name, school_id: school.id, role: ROLE_NAMES.school_admin },
-        redirectTo: `${env.frontendUrl}/auth/accept-invite`,
+        data: adminMetadata,
+        redirectTo: inviteRedirect,
       },
     });
-    if (inviteError) throw Object.assign(new Error(`Admin account creation failed: ${inviteError.message}`), { status: 500 });
-    adminAuthUser = inviteData.user;
-    activationLink = inviteData?.properties?.action_link || inviteData?.confirmation_url || null;
+    if (inviteError) {
+      const duplicate = inviteError.code === 'email_exists' || /already/i.test(inviteError.message);
+      if (!duplicate) throw Object.assign(new Error(`Admin account creation failed: ${inviteError.message}`), { status: 500 });
+      // GoTrue refuses a second invitation to an address it already knows, so a stranded identity can
+      // never be activated by mail. Give it a password instead, exactly as a staff reset does.
+      const generated = temporaryPassword();
+      const reclaim = await reclaimIdentity({
+        email: registration.admin_email,
+        password: generated,
+        metadata: adminMetadata,
+        mustChangePassword: true,
+      });
+      if (reclaim.status === 'failed') {
+        throw Object.assign(new Error(`Admin account creation failed: ${reclaim.error}`), { status: 500 });
+      }
+      if (reclaim.status !== 'reclaimed') {
+        throw Object.assign(new Error('An account with this administrator email already exists. Use a different email.'), { status: 409 });
+      }
+      adminAuthUser = reclaim.user;
+      handedPassword = generated;
+    } else {
+      adminAuthUser = inviteData.user;
+      activationLink = inviteData?.properties?.action_link || inviteData?.confirmation_url || null;
+    }
   }
 
+  const usableNow = hasPassword || Boolean(handedPassword);
   const { data: adminMembership, error: e2 } = await supabase.from('school_users').insert({
     school_id: school.id,
     auth_user_id: adminAuthUser.id,
     full_name: registration.admin_full_name,
     email: registration.admin_email,
     phone: registration.admin_phone,
-    status: hasPassword ? 'active' : 'pending_verification',
-    email_verified: hasPassword,
+    status: usableNow ? 'active' : 'pending_verification',
+    email_verified: usableNow,
   }).select().single();
   if (e2) throw Object.assign(new Error(`Admin membership failed: ${e2.message}`), { status: 500 });
 
   await assignRole(school.id, adminMembership.id, ROLE_NAMES.school_admin);
 
-  if (hasPassword) {
+  if (usableNow) {
     try {
       await setIssuedCredential(adminAuthUser.id, {
-        schoolId: school.id, membershipId: adminMembership.id, password: registration.admin_password,
+        schoolId: school.id, membershipId: adminMembership.id,
+        password: registration.admin_password || handedPassword,
       });
     } catch { /* a missing vault key must not undo the school creation */ }
   }
 
-  if (!hasPassword) {
+  if (!usableNow) {
     await sendMail({
       to: registration.admin_email,
       template: 'staff_invitation',
@@ -158,7 +195,7 @@ export async function provisionSchool({ registration, adminUser }, { actor } = {
     });
   }
 
-  return { school, subscriptionError: subError, activationLink };
+  return { school, subscriptionError: subError, activationLink, temporaryAdminPassword: handedPassword };
 }
 
 /** Creates the 17 system roles + their default permission grants for a school. Idempotent. */
