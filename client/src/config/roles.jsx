@@ -70,6 +70,8 @@ export const ROLE_CONFIG = {
       { title: 'nav.overview', items: [
         custom('dashboard', '/school-admin', 'school.view', 'dashboard'),
         custom('announcements', '/m/announcements', 'announcements.view', 'announcements'),
+        custom('send-notice', '/school/send-notice', 'notifications.send', 'announcements'),
+        custom('notification-report', '/school/notification-report', 'notifications.export', 'analytics'),
       ] },
       { title: 'nav.people', items: [
         custom('users', '/school/users', 'users.view', 'users'),
@@ -146,6 +148,8 @@ export const ROLE_CONFIG = {
         custom('examinations', '/m/examinations', 'examinations.view', 'exams'),
         m('discipline-records', 'discipline.view', 'discipline'),
         m('announcements', 'announcements.view', 'announcements'),
+        custom('send-notice', '/school/send-notice', 'notifications.send', 'announcements'),
+        custom('notification-report', '/school/notification-report', 'notifications.export', 'analytics'),
         custom('reports', '/school/reports', 'reports.view', 'analytics'),
         m('elections', 'elections.view', 'elections'),
       ] },
@@ -198,6 +202,7 @@ export const ROLE_CONFIG = {
         m('learning-materials', 'learning.view', 'subjects'),
         m('assignments', 'learning.view', 'marks'),
         m('announcements', 'announcements.view', 'announcements'),
+        custom('send-notice', '/school/send-notice', 'notifications.send', 'announcements'),
       ] },
     ],
   },
@@ -207,6 +212,7 @@ export const ROLE_CONFIG = {
     groups: [
       { title: 'nav.overview', items: [
         custom('dashboard', '/accountant', 'finance.view', 'dashboard'),
+        custom('send-notice', '/school/send-notice', 'notifications.send', 'announcements'),
         custom('fee-collection', '/m/fee-collection', 'finance.view', 'payments'),
         custom('finance-payments', '/m/finance-payments', 'finance.create', 'payments'),
         custom('finance-summary', '/m/finance-summary', 'finance.view', 'analytics'),
@@ -225,6 +231,7 @@ export const ROLE_CONFIG = {
     groups: [
       { title: 'nav.overview', items: [
         custom('dashboard', '/exam-officer', 'examinations.view', 'dashboard'),
+        custom('send-notice', '/school/send-notice', 'notifications.send', 'announcements'),
         custom('examinations', '/m/examinations', 'examinations.manage', 'exams'),
         m('examination-schedules', 'examinations.view', 'timetable'),
         m('examination-invigilators', 'examinations.view', 'users'),

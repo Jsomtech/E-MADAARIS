@@ -15,6 +15,8 @@ import BackupsPage from './BackupsPage.jsx';
 import TimetablePage from './TimetablePage.jsx';
 import TransfersPage from './TransfersPage.jsx';
 import StudentElectionsPage from './StudentElectionsPage.jsx';
+import NoticeComposerPage from './NoticeComposerPage.jsx';
+import NotificationReportPage from './NotificationReportPage.jsx';
 
 /** Keys are the segment in /school/:section. */
 export const SCHOOL_SECTIONS = {
@@ -31,6 +33,8 @@ export const SCHOOL_SECTIONS = {
   'my-children': MyChildrenPage,
   'my-timetable': MyTimetablePage,
   'student-elections': StudentElectionsPage,
+  'send-notice': NoticeComposerPage,
+  'notification-report': NotificationReportPage,
   trash: TrashPage,
   backups: BackupsPage,
   timetable: TimetablePage,

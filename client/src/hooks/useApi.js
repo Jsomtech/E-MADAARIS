@@ -3,7 +3,7 @@ import { apiGet, apiPost, apiPatch, apiDelete } from '../api/client.js';
 
 /** GET a resource with server-side params; refetches when params change. */
 export function useApi(path, params, enabled = true) {
-  const [state, setState] = useState({ data: null, total: null, loading: enabled, error: null });
+  const [state, setState] = useState({ data: null, total: null, unread: null, meta: null, loading: enabled, error: null });
   const fingerprint = JSON.stringify(params || {});
   const mounted = useRef(true);
   useEffect(() => {
@@ -16,9 +16,16 @@ export function useApi(path, params, enabled = true) {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const body = await apiGet(path, params || undefined);
-      if (mounted.current) setState({ data: body.data, total: body.total ?? null, page: body.page, loading: false, error: null });
+      if (mounted.current) {
+        // `unread` is the inbox's own count of everything waiting, not just the page being shown.
+        // `meta` keeps the rest of the envelope (filter choices, a sampled flag) without a second call.
+        setState({
+          data: body.data, total: body.total ?? null, unread: body.unread ?? null,
+          page: body.page, meta: body, loading: false, error: null,
+        });
+      }
     } catch (error) {
-      if (mounted.current) setState({ data: null, total: null, loading: false, error });
+      if (mounted.current) setState((s) => ({ ...s, data: null, total: null, unread: null, meta: null, loading: false, error }));
     }
   }, [path, fingerprint, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
 

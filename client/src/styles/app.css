@@ -140,6 +140,13 @@ a:hover { color: var(--brand-strong); }
 }
 .btn-icon:hover { background: var(--brand-soft); color: var(--brand); border-color: #d9ceff; }
 .btn-icon.sm { width: 30px; height: 30px; border-radius: 0.5rem; }
+/* The green mark means this inbox is fed live by the database rather than waiting for a refresh. */
+.bell-live {
+  position: absolute; bottom: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ok); box-shadow: 0 0 0 2px #fff; animation: bell-live 2.4s ease-in-out infinite;
+}
+@keyframes bell-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) { .bell-live { animation: none; } }
 a:focus-visible, .btn:focus-visible, .btn-icon:focus-visible, .app-nav-link:focus-visible {
   outline: 2px solid var(--brand); outline-offset: 2px;
 }

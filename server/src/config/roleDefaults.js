@@ -40,14 +40,15 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     reports: ['view', 'export'], certificates: ALL, library: ALL, discipline: ALL,
     transport: ALL, hr: ALL, reception: ALL, lab: ALL,
     elections: [...ALL, 'reject', 'publish'],
-    subscription: ['view'], support: ['view', 'create'], audit: ['view'], notifications: ['view'],
+    subscription: ['view'], support: ['view', 'create'], audit: ['view'],
+    notifications: ['view', 'send', 'export'],
   }),
   principal: expand({
     school: ['view'], students: ['view'], teachers: ['view'], staff: ['view'],
     guardians: ['view'], attendance: ['view'], timetable: ['view'],
     examinations: ['view'], marks: ['view'], results: ['view', 'approve', 'reject'],
     finance: ['view'], reports: ['view', 'export'], announcements: ['view', 'create'],
-    discipline: ['view'], notifications: ['view'], elections: ['view', 'export'],
+    discipline: ['view'], notifications: ['view', 'send', 'export'], elections: ['view', 'export'],
   }),
   vice_principal: expand({
     students: ['view'], teachers: ['view'], attendance: ['view'], timetable: ['view'],
@@ -63,15 +64,15 @@ export const DEFAULT_ROLE_PERMISSIONS = {
     students: ['view'], attendance: ['view', 'create', 'edit'], timetable: ['view'],
     examinations: ['view'], marks: ['view', 'create', 'edit', 'submit'],
     learning: ['view', 'create', 'edit'], reports: ['view'],
-    announcements: ['view'], notifications: ['view'],
+    announcements: ['view'], notifications: ['view', 'send'],
   }),
   accountant: expand({
     students: ['view'], finance: ALL, reports: ['view', 'export'],
-    examinations: ['view'], notifications: ['view'],
+    examinations: ['view'], notifications: ['view', 'send'],
   }),
   exam_officer: expand({
     examinations: ALL, marks: ['view', 'edit'], results: ['view', 'manage', 'publish'],
-    students: ['view'], timetable: ['view'], reports: ['view', 'export'], notifications: ['view'],
+    students: ['view'], timetable: ['view'], reports: ['view', 'export'], notifications: ['view', 'send'],
   }),
   invigilator: expand({
     examinations: ['view'], students: ['view'], notifications: ['view'],

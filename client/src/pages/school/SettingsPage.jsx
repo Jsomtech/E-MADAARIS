@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
-import { Layers, Plus, RefreshCw, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { BellRing, Layers, Plus, RefreshCw, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { apiPatch } from '../../api/client.js';
 import Field from '../../components/ui/Field.jsx';
@@ -19,6 +19,8 @@ const DEFAULTS = {
   grading_configuration: {},
   attendance_configuration: {},
   branding: {},
+  // The keys server/src/services/notificationScheduler.js reads; the lead times are its own defaults.
+  notification_configuration: { lesson_reminders: false, lesson_lead_minutes: 10, assignment_reminder_hours: 24, subscription_alerts: true },
 };
 
 /** school_working_days is text[]; the enum values used across the app start on Saturday. */
@@ -71,6 +73,7 @@ export default function SettingsPage() {
       grading_configuration: row.grading_configuration || {},
       attendance_configuration: row.attendance_configuration || {},
       branding: row.branding || {},
+      notification_configuration: { ...DEFAULTS.notification_configuration, ...(row.notification_configuration || {}) },
     });
   }, [settings.data]);
 
@@ -79,7 +82,18 @@ export default function SettingsPage() {
     label: `${y.name}${y.is_current ? ` — ${t('sections.currentYear', { defaultValue: 'current' })}` : ''}`,
   })), [years.data, t]);
 
+  // GET /school/settings answers select('*'): a tenant whose database has not run migration 0025 has no
+  // key at all, and sending one would fail the whole save rather than just this card.
+  const hasNotificationColumn = !settings.data || settings.data.notification_configuration !== undefined;
+
   const set = useCallback((patch) => setValues((prev) => ({ ...(prev || DEFAULTS), ...patch })), []);
+
+  const setNotify = useCallback((key, value) => {
+    setValues((prev) => ({
+      ...(prev || DEFAULTS),
+      notification_configuration: { ...DEFAULTS.notification_configuration, ...(prev?.notification_configuration || {}), [key]: value },
+    }));
+  }, []);
 
   const toggleDay = useCallback((day, checked) => {
     setValues((prev) => {
@@ -100,6 +114,7 @@ export default function SettingsPage() {
       grading_configuration: values.grading_configuration,
       attendance_configuration: values.attendance_configuration,
       branding: values.branding,
+      ...(hasNotificationColumn ? { notification_configuration: values.notification_configuration } : {}),
     };
     setSaving(true);
     try {
@@ -113,7 +128,7 @@ export default function SettingsPage() {
     } finally {
       setSaving(false);
     }
-  }, [values, settings, t]);
+  }, [values, settings, hasNotificationColumn, t]);
 
   if (settings.loading && !settings.data) return <Spinner label={t('common.loading')} />;
   if (settings.error) return <ErrorState error={settings.error} onRetry={settings.reload} />;
@@ -190,6 +205,52 @@ export default function SettingsPage() {
               </div>
               <div className="form-text small">
                 {t('sections.workingDaysHelp', { defaultValue: 'Stored as school_working_days text[] — column default {Sat, Sun, Mon, Tue, Wed}. Selected: {{days}}', days: values.school_working_days.join(', ') || t('sections.noneSelected', { defaultValue: 'none' }) })}
+              </div>
+            </div>
+          </div>
+
+          <div className="card-soft p-3 mt-3">
+            <div className="fw-semibold mb-1"><BellRing size={15} className="me-1" /> {t('sections.automation', { defaultValue: 'Automated notices' })}</div>
+            <div className="small text-muted mb-3">
+              {t('sections.automationHelp', { defaultValue: 'What the platform clock may send on this school\'s behalf. A timetable reminder is only read for schools that switched it on, so nothing arrives until you ask.' })}
+            </div>
+            {!hasNotificationColumn && (
+              <div className="alert alert-secondary small py-2 mb-3">
+                {t('sections.automationNeedsMigration', { defaultValue: 'This database has no notification_configuration column yet, so these switches are saved nowhere. Apply supabase/migrations/0025_notification_ops.sql to unlock them.' })}
+              </div>
+            )}
+            <div className="row g-3">
+              <div className="col-12">
+                <div className="form-check form-switch">
+                  <input className="form-check-input" type="checkbox" role="switch" id="notify-lessons"
+                    checked={Boolean(values.notification_configuration?.lesson_reminders)} disabled={!mayEdit || !hasNotificationColumn}
+                    onChange={(e) => setNotify('lesson_reminders', e.target.checked)} />
+                  <label className="form-check-label small fw-semibold" htmlFor="notify-lessons">{t('sections.lessonReminders', { defaultValue: 'Remind before each lesson' })}</label>
+                </div>
+                <div className="form-text small">{t('sections.lessonRemindersHelp', { defaultValue: 'Uses the timezone above as the school\'s own clock, so a period is announced at the right minute in Mogadishu.' })}</div>
+              </div>
+              <Field field={{
+                name: 'lesson_lead_minutes', type: 'number', col: 6,
+                label: t('sections.lessonLead', { defaultValue: 'Minutes before the period' }),
+                help: t('sections.lessonLeadHelp', { defaultValue: '1–180. Default 10.' }),
+              }} value={values.notification_configuration?.lesson_lead_minutes}
+              disabled={!mayEdit || !hasNotificationColumn}
+              onChange={(v) => setNotify('lesson_lead_minutes', Number(v) || DEFAULTS.notification_configuration.lesson_lead_minutes)} />
+              <Field field={{
+                name: 'assignment_reminder_hours', type: 'number', col: 6,
+                label: t('sections.assignmentLead', { defaultValue: 'Hours before a deadline' }),
+                help: t('sections.assignmentLeadHelp', { defaultValue: '1–336. Default 24. Sent once per assignment.' }),
+              }} value={values.notification_configuration?.assignment_reminder_hours}
+              disabled={!mayEdit || !hasNotificationColumn}
+              onChange={(v) => setNotify('assignment_reminder_hours', Number(v) || DEFAULTS.notification_configuration.assignment_reminder_hours)} />
+              <div className="col-12">
+                <div className="form-check form-switch">
+                  <input className="form-check-input" type="checkbox" role="switch" id="notify-subscription"
+                    checked={Boolean(values.notification_configuration?.subscription_alerts)} disabled={!mayEdit || !hasNotificationColumn}
+                    onChange={(e) => setNotify('subscription_alerts', e.target.checked)} />
+                  <label className="form-check-label small fw-semibold" htmlFor="notify-subscription">{t('sections.subscriptionAlerts', { defaultValue: 'Tell staff about plan renewal and expiry' })}</label>
+                </div>
+                <div className="form-text small">{t('sections.subscriptionAlertsHelp', { defaultValue: 'On unless switched off: renewal, grace period and expiry notices for this school\'s subscription.' })}</div>
               </div>
             </div>
           </div>

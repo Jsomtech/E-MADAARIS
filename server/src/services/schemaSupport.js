@@ -98,3 +98,42 @@ export async function electionsSchemaReady() {
   }
   return true;
 }
+
+/**
+ * Migration 0025 adds priority and batch_id to notifications, the queue and delivery-log tables, the
+ * push switch on preferences and the tenant's notification_configuration. Ordinary events keep reaching
+ * the inbox without it — notify() drops the columns it cannot write — but the composer and the
+ * scheduler's clock-driven sweeps need the tables to exist, so they stay idle until the school pastes
+ * the file. Like monthlyFeeSchemaReady(), a "not ready" answer is never cached.
+ */
+let notifyOps = null;
+
+export async function notificationOpsReady() {
+  if (notifyOps === true) return true;
+  const [queue, columns, logs] = await Promise.all([
+    requireDb().from('scheduled_notifications').select('id, status').limit(1),
+    requireDb().from('notifications').select('id, priority, batch_id').limit(1),
+    requireDb().from('notification_delivery_logs').select('id, channel').limit(1),
+  ]);
+  const error = queue.error || columns.error || logs.error;
+  if (!error) { notifyOps = true; return true; }
+  if (/could not find|does not exist|schema cache|unknown column|relation/i.test(error.message || '')) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Migration 0025 also adds the per-category push switch to notification_preferences. The switch is
+ * offered only when the column is there: a school that has not pasted the file yet gets the two toggles
+ * it can actually keep, not a third that resets on reload.
+ */
+let pushSwitch = null;
+
+export async function notificationPushPreferenceColumn() {
+  if (pushSwitch === true) return true;
+  const { error } = await requireDb().from('notification_preferences').select('category, push').limit(1);
+  if (!error) { pushSwitch = true; return true; }
+  if (/could not find|does not exist|schema cache|unknown column/i.test(error.message || '')) return false;
+  return true;
+}

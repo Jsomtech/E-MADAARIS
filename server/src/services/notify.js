@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { db } from '../config/supabase.js';
 import { env } from '../config/env.js';
 import { sendPushToUsers } from './fcm.js';
@@ -18,6 +19,8 @@ const QUERY_CHUNK = 200;
 /** A whole-school notice to thousands of accounts is a job, not a request; the cap keeps one click
  *  from turning into tens of thousands of rows the tenant will never read. */
 const MAX_AUDIENCE = 3000;
+/** PostgREST's wording when a column or table is not in its schema cache, i.e. a migration is missing. */
+const MISSING_SCHEMA = /could not find|does not exist|schema cache|unknown column|relation/i;
 
 export const NOTIFICATION_CATEGORIES = [
   'general', 'account', 'attendance', 'timetable', 'academic', 'results',
@@ -32,77 +35,138 @@ function chunk(items, size) {
 
 /** Recipients who still want this category, plus those whose preference row asks for email too.
  *  One read per event: the preferences table only ever holds rows for people who changed a switch,
- *  so it is small and filtering it locally beats chunking the audience through PostgREST. */
+ *  so it is small and filtering it locally beats chunking the audience through PostgREST.
+ *
+ *  Two switches matter here. `in_app` false is a category opt-out — that person is dropped from every
+ *  channel, because they asked not to be told about this kind of event at all. `push` false keeps the
+ *  inbox row and loses only the browser notification, which is the difference between a quiet device
+ *  and a message nobody ever sees. */
 async function applyPreferences(supabase, schoolId, userIds, category) {
-  if (!schoolId) return { allowed: userIds, suppressed: 0, emailTo: new Set() };
+  if (!schoolId) return { allowed: userIds, suppressed: 0, emailTo: new Set(), pushOff: new Set() };
   const optedOut = new Set();
   const emailOptedIn = new Set();
-  const { data, error } = await supabase.from('notification_preferences')
-    .select('school_user_id, in_app, email').eq('school_id', schoolId).eq('category', category).limit(5000);
-  if (!error) {
-    for (const row of data || []) {
-      if (row.in_app === false) optedOut.add(row.school_user_id);
-      else if (row.email === true) emailOptedIn.add(row.school_user_id);
+  const pushSilenced = new Set();
+  for (const row of await readPreferences(supabase, schoolId, category)) {
+    if (row.in_app === false) optedOut.add(row.school_user_id);
+    else {
+      if (row.email === true) emailOptedIn.add(row.school_user_id);
+      if (row.push === false) pushSilenced.add(row.school_user_id);
     }
   }
   return {
     allowed: userIds.filter((id) => !optedOut.has(id)),
     suppressed: optedOut.size,
     emailTo: emailOptedIn,
+    pushOff: pushSilenced,
   };
 }
 
+/** Migration 0025 adds the `push` switch. A database that has not run it yet still has the switches it
+ *  does have, and an opt-out must be honoured rather than quietly dropped because one column is missing. */
+async function readPreferences(supabase, schoolId, category) {
+  const current = await supabase.from('notification_preferences')
+    .select('school_user_id, in_app, email, push').eq('school_id', schoolId).eq('category', category).limit(5000);
+  if (!current.error) return current.data || [];
+  if (!MISSING_SCHEMA.test(current.error.message || '')) return [];
+  const legacy = await supabase.from('notification_preferences')
+    .select('school_user_id, in_app, email').eq('school_id', schoolId).eq('category', category).limit(5000);
+  return legacy.error ? [] : (legacy.data || []);
+}
+
+/** Whether this database has 0025's columns on notifications; probed by the first insert, then remembered. */
+let inboxHasOpsColumns = null;
+
 /**
- * @param {object} options schoolId, scope ('school'|'platform'), category, title, body, link,
- *                         icon, email (honour the per-category email preference, default true)
- * @returns {{ inserted: number, suppressed: number, truncated: boolean, push: Promise, email: Promise }}
+ * Write the inbox rows, reading the ids back for the delivery join. An installation that has not applied
+ * 0025 gets the same message without the priority and batch bookkeeping — a missing migration must never
+ * be the reason a school's notice fails to reach anybody.
+ */
+async function insertInbox(supabase, rows) {
+  const strip = (items) => items.map(({ priority: _priority, batch_id: _batchId, ...rest }) => rest);
+  if (inboxHasOpsColumns === false) {
+    return supabase.from('notifications').insert(strip(rows)).select('id, recipient_user_id');
+  }
+  const attempt = await supabase.from('notifications').insert(rows).select('id, recipient_user_id');
+  if (!attempt.error) { inboxHasOpsColumns = true; return attempt; }
+  if (!MISSING_SCHEMA.test(attempt.error.message || '')) return attempt;
+  const retry = await supabase.from('notifications').insert(strip(rows)).select('id, recipient_user_id');
+  if (!retry.error) inboxHasOpsColumns = false;
+  return retry;
+}
+
+/**
+ * @param {object} options schoolId, scope ('school'|'platform'), category, title, body, link, icon,
+ *                         priority, batchId, channels (['in_app','push','email']),
+ *                         email (honour the per-category email preference, default true)
+ * @returns {{ inserted, suppressed, truncated, batch, push: Promise, email: Promise }}
  */
 export async function notify(supabase, userIds, {
   schoolId = null, scope = 'school', category = 'general',
   title, body = null, link = null, icon = null, email = true,
+  priority = 'normal', batchId = null, channels = null,
 } = {}) {
   const ids = [...new Set((userIds || []).filter(Boolean))];
-  const summary = { inserted: 0, suppressed: 0, truncated: false, push: Promise.resolve(null), email: Promise.resolve(null) };
+  const summary = { inserted: 0, suppressed: 0, truncated: false, batch: batchId || randomUUID(), push: Promise.resolve(null), email: Promise.resolve(null) };
   if (!ids.length || !title) return summary;
   const audience = ids.slice(0, MAX_AUDIENCE);
   summary.truncated = ids.length > MAX_AUDIENCE;
 
+  const wants = new Set(channels?.length ? channels : ['in_app', 'push']);
   const prefs = await applyPreferences(supabase, scope === 'school' ? schoolId : null, audience, category);
   summary.suppressed = prefs.suppressed;
   if (!prefs.allowed.length) return summary;
 
-  const rows = prefs.allowed.map((recipient_user_id) => ({
-    school_id: scope === 'school' ? schoolId : null,
-    recipient_user_id,
-    recipient_scope: scope,
-    category,
-    title,
-    body,
-    link,
-    is_read: false,
-  }));
-  for (const part of chunk(rows, INSERT_BATCH)) {
-    const { error } = await supabase.from('notifications').insert(part);
-    if (error) {
-      return { ...summary, inserted: 0, suppressed: 0, error: error.message, push: Promise.resolve(null), email: Promise.resolve(null) };
+  let notificationIds = null;
+  if (wants.has('in_app')) {
+    const rows = prefs.allowed.map((recipient_user_id) => ({
+      school_id: scope === 'school' ? schoolId : null,
+      recipient_user_id,
+      recipient_scope: scope,
+      category,
+      priority,
+      title,
+      body,
+      link,
+      batch_id: summary.batch,
+      is_read: false,
+    }));
+    // Reading the new ids back costs one response body per chunk and buys the join that analytics
+    // needs: which device answered for which inbox row.
+    notificationIds = new Map();
+    for (const part of chunk(rows, INSERT_BATCH)) {
+      const { data, error } = await insertInbox(supabase, part);
+      if (error) {
+        return { ...summary, inserted: 0, suppressed: 0, error: error.message, push: Promise.resolve(null), email: Promise.resolve(null) };
+      }
+      for (const row of data || []) notificationIds.set(row.recipient_user_id, row.id);
     }
+    summary.inserted = rows.length;
+    if (!notificationIds.size) notificationIds = null;
   }
-  summary.inserted = rows.length;
 
-  summary.push = sendPushToUsers(prefs.allowed, {
-    scope, title, body: body || '', link: link || '/', tag: category, icon: icon || undefined,
-  }).catch((error) => ({ attempted: 0, sent: 0, failed: 0, skipped: 'push_threw', error: error.message }));
+  const pushTo = wants.has('push')
+    ? prefs.allowed.filter((id) => !prefs.pushOff.has(id))
+    : [];
+  if (pushTo.length) {
+    summary.push = sendPushToUsers(pushTo, {
+      scope, title, body: body || '', link: link || '/', tag: category, icon: icon || undefined,
+      priority, batchId: summary.batch, notificationIds,
+    }).catch((error) => ({ attempted: 0, sent: 0, failed: 0, skipped: 'push_threw', error: error.message }));
+  }
 
-  if (email && prefs.emailTo.size) {
-    const mailTo = prefs.allowed.filter((id) => prefs.emailTo.has(id));
-    summary.email = sendCategoryMails(supabase, schoolId, mailTo, { title, body, link })
-      .catch(() => ({ mailed: 0 }));
+  const mailTo = wants.has('email') && email ? prefs.allowed.filter((id) => prefs.emailTo.has(id)) : [];
+  if (mailTo.length) {
+    summary.email = sendCategoryMails(supabase, schoolId, mailTo, {
+      title, body, link, scope, priority, batchId: summary.batch, notificationIds,
+    }).catch(() => ({ mailed: 0 }));
   }
   return summary;
 }
 
 /** Email copies are opt-in per category, so the address book is only read for those few rows. */
-async function sendCategoryMails(supabase, schoolId, userIds, { title, body, link }) {
+async function sendCategoryMails(supabase, schoolId, userIds, {
+  title, body, link, scope = 'school', priority = 'normal', batchId = null, notificationIds = null,
+}) {
   const { data: people } = await supabase.from('school_users').select('id, email, full_name')
     .eq('school_id', schoolId).in('id', userIds.slice(0, QUERY_CHUNK));
   let mailed = 0;
@@ -117,8 +181,20 @@ async function sendCategoryMails(supabase, schoolId, userIds, { title, body, lin
         body: body || '',
         link: link ? `${env.appBaseUrl.replace(/\/+$/, '')}/${String(link).replace(/^\/+/, '')}` : '',
       },
-    }).catch(() => null);
+    }).then((value) => value).catch((error) => ({ sent: false, error: error.message }));
     if (result?.sent) mailed += 1;
+    // The mail leg is logged like the push leg, so "we tried" and "the provider took it" stay
+    // separate claims. The address itself is not copied into history — it is already on the account.
+    try {
+      await supabase.from('notification_delivery_logs').insert({
+        school_id: schoolId, batch_id: batchId,
+        notification_id: notificationIds?.get(person.id) || null,
+        recipient_user_id: person.id, recipient_scope: scope, channel: 'email',
+        delivery_status: result?.sent ? 'sent' : 'failed',
+        provider_code: result?.sent ? null : (result?.error ? 'MAIL_PROVIDER' : 'NOT_SENT'),
+        error_message: result?.sent ? null : String(result?.error || 'the provider did not accept the message').slice(0, 500),
+      });
+    } catch { /* history never outranks the message */ }
   }
   return { mailed };
 }
@@ -322,6 +398,7 @@ export async function householdsByStudent(supabase, schoolId, studentIds) {
  */
 export function alertUsers(req, recipients, {
   category = 'general', title, body = null, link = '/notifications', scope = null, schoolId = null,
+  priority = 'normal', channels = null,
 } = {}) {
   const auth = req?.auth;
   if (!auth || !title) return;
@@ -330,6 +407,8 @@ export function alertUsers(req, recipients, {
   notifyLater(`notify ${category}: ${title}`, async () => {
     const supabase = db();
     const ids = typeof recipients === 'function' ? await recipients(supabase, tenantId) : recipients;
-    return notify(supabase, ids, { schoolId: tenantId, scope: tenantScope, category, title, body, link });
+    return notify(supabase, ids, {
+      schoolId: tenantId, scope: tenantScope, category, title, body, link, priority, channels,
+    });
   }, req.log);
 }

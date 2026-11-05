@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { ICONS, navigationFor, roleConfig } from '../../config/roles.jsx';
 import { apiPost } from '../../api/client.js';
 import { useApi } from '../../hooks/useApi.js';
+import { useNotificationStream } from '../../hooks/useNotificationStream.js';
 import { humanize } from '../../config/resources.jsx';
 import BrandLogo from '../brand/BrandLogo.jsx';
 import { isRunningStandalone, promptInstall, watchInstallable, watchOnline } from '../../services/pwa.js';
@@ -54,7 +55,8 @@ function NotificationBell() {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const navigate = useNavigate();
-  const { data, loading, refetch } = useApi('/school/notifications', { limit: 8 }, true);
+  const { data, loading, refetch, unread: unreadTotal } = useApi('/school/notifications', { limit: 8 }, true);
+  const refreshTimer = useRef(null);
   useEffect(() => {
     const onClick = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', onClick);
@@ -67,8 +69,16 @@ function NotificationBell() {
     window.addEventListener('emadaaris:push', onPush);
     return () => window.removeEventListener('emadaaris:push', onPush);
   }, [refetch]);
+  // The live feed says the same thing sooner and on any browser, including one where push was declined.
+  // A broadcast writes hundreds of rows at once, so a burst of events is coalesced into one refresh.
+  const { live } = useNotificationStream(() => {
+    clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(refetch, 400);
+  });
+  useEffect(() => () => clearTimeout(refreshTimer.current), []);
   const items = Array.isArray(data) ? data : [];
-  const unread = items.filter((i) => !i.is_read).length;
+  // The dropdown shows eight, the badge counts everything waiting.
+  const unread = unreadTotal ?? items.filter((i) => !i.is_read).length;
 
   const openItem = (event, n) => {
     event.preventDefault();
@@ -81,6 +91,9 @@ function NotificationBell() {
     <div className="position-relative" ref={ref}>
       <button type="button" className="btn-icon position-relative" onClick={() => setOpen((o) => !o)} aria-label={t('common.notifications')}>
         <Bell size={17} />
+        {live && (
+          <span className="bell-live" title={t('notifications.liveFeed', { defaultValue: 'Updates itself — no refresh needed' })} aria-hidden="true" />
+        )}
         {unread > 0 && (
           <span className="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger"
             style={{ fontSize: '.6rem', padding: '.25em .45em' }}>

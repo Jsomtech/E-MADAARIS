@@ -17,6 +17,7 @@ import { env } from '../config/env.js';
 const TOKEN_URI = 'https://oauth2.googleapis.com/token';
 const MESSAGING_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const SEND_CONCURRENCY = 12;
+const LOG_BATCH = 200;
 // One event must never turn into thousands of HTTPS calls on the request's behalf.
 const MAX_DEVICES_PER_SEND = 500;
 const TOKEN_CHUNK = 100;
@@ -120,7 +121,7 @@ function linkUrl(link) {
   return `${env.appBaseUrl.replace(/\/+$/, '')}/${String(path).replace(/^\/+/, '')}`;
 }
 
-function buildMessage(token, { title, body, link, tag, icon }) {
+function buildMessage(token, { title, body, link, tag, icon, priority }) {
   const text = (value, fallback = '') => String(value ?? fallback);
   return {
     message: {
@@ -132,6 +133,7 @@ function buildMessage(token, { title, body, link, tag, icon }) {
         body: text(body),
         url: text(link, '/'),
         tag: text(tag, 'general'),
+        priority: text(priority, 'normal'),
       },
       webpush: {
         headers: { TTL: '3600' },
@@ -160,9 +162,27 @@ async function sendOne(bearer, token, payload) {
     const body = await response.json().catch(() => ({}));
     const status = body?.error?.status || '';
     const stale = response.status === 404 || ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(status);
-    return { ok: false, stale, detail: status || `HTTP ${response.status}` };
+    return {
+      ok: false, stale, detail: status || `HTTP ${response.status}`,
+      // The provider's own sentence, kept short. It explains a failure without ever naming the device.
+      reason: String(body?.error?.message || '').slice(0, 500) || null,
+    };
   } catch (error) {
     return { ok: false, stale: false, detail: error.message };
+  }
+}
+
+/**
+ * Delivery history is written after the attempt, never before: a log that promised a send the provider
+ * never saw would mislead whoever reads the analytics screen. A history write cannot break a delivery,
+ * so its own failure is swallowed rather than turned into a failed message.
+ */
+async function logDelivery(rows) {
+  if (!rows.length) return;
+  for (let i = 0; i < rows.length; i += LOG_BATCH) {
+    try {
+      await db().from('notification_delivery_logs').insert(rows.slice(i, i + LOG_BATCH));
+    } catch { /* the message itself already reached the inbox */ }
   }
 }
 
@@ -186,42 +206,74 @@ async function pool(items, limit, worker) {
  * Returns a summary rather than throwing: a push outage must never roll back the school event that
  * caused it. `unregistered` tokens are dropped so a signed-out browser stops being retried.
  */
-export async function sendPushToUsers(userIds, { scope = 'school', title, body = '', link = '/', tag = 'general', icon } = {}) {
+export async function sendPushToUsers(userIds, {
+  scope = 'school', title, body = '', link = '/', tag = 'general', icon,
+  priority = 'normal', batchId = null, notificationIds = null,
+} = {}) {
   const ids = [...new Set((userIds || []).filter(Boolean))];
   if (!ids.length) return { attempted: 0, sent: 0, failed: 0, skipped: null, error: null };
   if (!pushSenderStatus().ready) {
     return { attempted: ids.length, sent: 0, failed: 0, skipped: 'sender_not_configured', error: blockedReason };
   }
 
-  let tokens = [];
+  // The device row is read with the token so a delivery can be attributed to a person and a machine
+  // without ever storing the token outside push_tokens, where it already lives.
+  let devices = [];
   try {
     for (let i = 0; i < ids.length; i += TOKEN_CHUNK) {
       const { data, error } = await db().from('push_tokens')
-        .select('token').eq('user_type', scope).in('user_id', ids.slice(i, i + TOKEN_CHUNK)).limit(TOKEN_CHUNK);
+        .select('id, user_id, school_id, token').eq('user_type', scope).in('user_id', ids.slice(i, i + TOKEN_CHUNK)).limit(TOKEN_CHUNK);
       if (error) throw new Error(error.message);
-      tokens.push(...(data || []).map((row) => row.token));
+      devices.push(...(data || []));
     }
   } catch (error) {
     return { attempted: ids.length, sent: 0, failed: 0, skipped: 'token_lookup_failed', error: error.message };
   }
 
-  tokens = [...new Set(tokens.filter((t) => TOKEN_SHAPE.test(t)))].slice(0, MAX_DEVICES_PER_SEND);
-  if (!tokens.length) return { attempted: ids.length, sent: 0, failed: 0, skipped: 'no_registered_devices', error: null };
+  const seen = new Set();
+  devices = devices.filter((device) => {
+    if (!TOKEN_SHAPE.test(device.token) || seen.has(device.token)) return false;
+    seen.add(device.token);
+    return true;
+  }).slice(0, MAX_DEVICES_PER_SEND);
+  if (!devices.length) return { attempted: ids.length, sent: 0, failed: 0, skipped: 'no_registered_devices', error: null };
 
   let bearer;
   try {
     bearer = await bearerToken();
   } catch (error) {
     // A clock skew or a revoked key shows up here; keep the message in the in-app inbox.
-    return { attempted: tokens.length, sent: 0, failed: tokens.length, skipped: 'sender_credentials_rejected', error: error.message };
+    await logDelivery(devices.map((device) => ({
+      school_id: device.school_id, batch_id: batchId,
+      notification_id: notificationIds?.get(device.user_id) || null,
+      recipient_user_id: device.user_id, recipient_scope: scope, channel: 'push',
+      device_id: device.id, delivery_status: 'skipped', provider_code: 'SENDER_CREDENTIALS_REJECTED',
+      error_message: error.message,
+    })));
+    return { attempted: devices.length, sent: 0, failed: devices.length, skipped: 'sender_credentials_rejected', error: error.message };
   }
 
-  const payload = buildMessage(null, { title, body, link, tag, icon });
-  const results = await pool(tokens, SEND_CONCURRENCY, (token) => sendOne(bearer, token, { ...payload, message: { ...payload.message, token } }));
+  const payload = buildMessage(null, { title, body, link, tag, icon, priority });
+  const results = await pool(devices, SEND_CONCURRENCY,
+    (device) => sendOne(bearer, device.token, { ...payload, message: { ...payload.message, token: device.token } }));
   const sent = results.filter((r) => r.ok).length;
-  const dead = tokens.filter((_, index) => results[index]?.stale);
+  const dead = devices.filter((_, index) => results[index]?.stale);
+
+  await logDelivery(devices.map((device, index) => {
+    const result = results[index] || {};
+    return {
+      school_id: device.school_id, batch_id: batchId,
+      notification_id: notificationIds?.get(device.user_id) || null,
+      recipient_user_id: device.user_id, recipient_scope: scope, channel: 'push',
+      device_id: device.id,
+      delivery_status: result.ok ? 'sent' : 'failed',
+      provider_code: result.ok ? null : (result.detail || 'UNKNOWN'),
+      error_message: result.ok ? null : (result.reason || null),
+    };
+  }));
+
   if (dead.length) {
-    await db().from('push_tokens').delete().in('token', dead.slice(0, TOKEN_CHUNK)).then(
+    await db().from('push_tokens').delete().in('token', dead.slice(0, TOKEN_CHUNK).map((d) => d.token)).then(
       () => {}, () => { /* the next sign-in re-registers the device anyway */ },
     );
   }

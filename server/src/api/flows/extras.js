@@ -7,6 +7,8 @@ import { requirePermission, requirePlatform } from '../../middleware/rbac.js';
 import { audit } from '../../services/audit.js';
 import { visibleStudentIds } from '../../services/scopes.js';
 import { alertUsers, userIdsWithRoles, NOTIFICATION_CATEGORIES } from '../../services/notify.js';
+import { notificationPushPreferenceColumn, notificationOpsReady } from '../../services/schemaSupport.js';
+import { notificationsOpsRouter } from './notificationComposer.js';
 
 /**
  * Remaining school-facing flows: notifications, support tickets, certificates,
@@ -15,6 +17,9 @@ import { alertUsers, userIdsWithRoles, NOTIFICATION_CATEGORIES } from '../../ser
 
 // ---------- Notifications ----------
 export const notificationsRouter = Router();
+// The composer, queue and delivery reads live in their own module but answer on this mount, so the
+// whole notification surface stays one base path for the client.
+notificationsRouter.use(notificationsOpsRouter);
 
 async function unreadCount(supabase, req) {
   const { count } = await supabase.from('notifications').select('*', { count: 'exact', head: true })
@@ -23,19 +28,72 @@ async function unreadCount(supabase, req) {
   return count || 0;
 }
 
+/** PostgREST's `or=` list is comma-separated, so a search term cannot carry one. */
+function filterTerm(text) {
+  return String(text).replace(/[,*%()]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+
+/**
+ * The inbox, filterable. The page size is capped and the tenant's total comes back with it, so a year of
+ * notices is paged through rather than loaded whole.
+ */
 notificationsRouter.get('/', async (req, res, next) => {
   try {
+    const query = z.object({
+      category: z.enum(NOTIFICATION_CATEGORIES).optional(),
+      priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
+      search: z.string().trim().max(80).optional(),
+      from: z.coerce.date().optional(),
+      to: z.coerce.date().optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(25),
+      offset: z.coerce.number().int().min(0).default(0),
+    }).parse(req.query);
     const supabase = requireDb();
-    let q = supabase.from('notifications').select('*')
-      .eq('recipient_user_id', req.auth.userId)
-      .eq('recipient_scope', req.auth.type === 'platform' ? 'platform' : 'school');
-    if (req.query.unread === 'true') q = q.eq('is_read', false);
-    const { data, error } = await q.order('created_at', { ascending: false }).limit(100);
-    if (error) throw new ApiError(500, error.message);
-    res.json({ data: data || [], unread: await unreadCount(supabase, req) });
+    // `priority` is migration 0025's column. A database that has not run it cannot filter or sort by it,
+    // so the choices are named in the answer and the screen offers only what this tenant can ask for.
+    const mayUsePriority = await notificationOpsReady();
+    const scoped = () => {
+      let q = supabase.from('notifications').select('*', { count: 'exact' })
+        .eq('recipient_user_id', req.auth.userId)
+        .eq('recipient_scope', req.auth.type === 'platform' ? 'platform' : 'school');
+      if (req.query.unread === 'true' || req.query.unread === '1') q = q.eq('is_read', false);
+      if (query.category) q = q.eq('category', query.category);
+      if (query.priority && mayUsePriority) q = q.eq('priority', query.priority);
+      if (query.from) q = q.gte('created_at', query.from.toISOString());
+      if (query.to) q = q.lte('created_at', query.to.toISOString());
+      const term = query.search ? filterTerm(query.search) : '';
+      if (term) q = q.or(`title.ilike.*${term}*,body.ilike.*${term}*`);
+      return q;
+    };
+    let rows = null;
+    let count = 0;
+    const page = await scoped().order('created_at', { ascending: false })
+      .range(query.offset, query.offset + query.limit - 1);
+    if (page.error) {
+      // A page past the end is not a fault: the list shrank under the reader, who marked everything read
+      // or tightened a filter. Answer the real total and let the pager move back to a page that exists.
+      if (page.error.code !== 'PGRST103' && !/range not satisfiable/i.test(page.error.message || '')) throw new ApiError(500, page.error.message);
+      const rest = await scoped().limit(1);
+      if (rest.error) throw new ApiError(500, rest.error.message);
+      rows = [];
+      count = rest.count || 0;
+    } else {
+      rows = page.data || [];
+      count = page.count || 0;
+    }
+    res.json({
+      data: rows,
+      unread: await unreadCount(supabase, req),
+      total: count,
+      limit: query.limit,
+      offset: rows.length ? query.offset : 0,
+      categories: NOTIFICATION_CATEGORIES,
+      priorities: mayUsePriority ? ['low', 'normal', 'high', 'urgent'] : [],
+    });
   } catch (e) { next(e); }
 });
 
+/** Every waiting message at once. The reader chose to stop being told, not to delete the record. */
 notificationsRouter.post('/read-all', async (req, res, next) => {
   try {
     const supabase = requireDb();
@@ -60,12 +118,16 @@ notificationsRouter.post('/:id/read', async (req, res, next) => {
 /**
  * Per-user category choices. A platform identity has no school membership, so it has no preferences
  * row to write — the school inbox is the only place these toggles mean anything.
+ *
+ * The push switch arrives with migration 0025. Until the school pastes it, the row has no `push` key at
+ * all, and the screen leaves the switch off rather than offering a choice it cannot remember.
  */
 notificationsRouter.get('/preferences', async (req, res, next) => {
   try {
     if (req.auth.type !== 'school') return res.json({ data: [] });
+    const pushSwitch = await notificationPushPreferenceColumn();
     const { data, error } = await requireDb().from('notification_preferences')
-      .select('category, in_app, email')
+      .select(pushSwitch ? 'category, in_app, email, push' : 'category, in_app, email')
       .eq('school_id', req.auth.schoolId).eq('school_user_id', req.auth.userId).limit(100);
     if (error) throw new ApiError(500, error.message);
     const saved = new Map((data || []).map((row) => [row.category, row]));
@@ -73,6 +135,7 @@ notificationsRouter.get('/preferences', async (req, res, next) => {
       data: NOTIFICATION_CATEGORIES.map((category) => ({
         category,
         in_app: saved.get(category)?.in_app ?? true,
+        ...(pushSwitch ? { push: saved.get(category)?.push ?? true } : {}),
         email: saved.get(category)?.email ?? false,
       })),
     });
@@ -84,18 +147,51 @@ notificationsRouter.put('/preferences', async (req, res, next) => {
     if (req.auth.type !== 'school') throw new ApiError(400, 'Notification preferences belong to a school account');
     const body = z.object({
       category: z.enum(NOTIFICATION_CATEGORIES),
-      in_app: z.coerce.boolean().default(true),
-      email: z.coerce.boolean().default(false),
+      in_app: flag(true),
+      push: flag(true),
+      email: flag(false),
     }).parse(req.body);
+    const pushSwitch = await notificationPushPreferenceColumn();
     const { data, error } = await requireDb().from('notification_preferences')
       .upsert({
         school_id: req.auth.schoolId, school_user_id: req.auth.userId,
         category: body.category, in_app: body.in_app, email: body.email,
+        ...(pushSwitch ? { push: body.push } : {}),
       }, { onConflict: 'school_user_id,category' }).select().maybeSingle();
     if (error) throw new ApiError(500, error.message);
     res.json({ data });
   } catch (e) { next(e); }
 });
+
+/**
+ * One message, for a detail pane or a deep link from a push.
+ *
+ * Declared last because it is the only GET here whose path segment is a parameter: mounted above
+ * /preferences it would swallow that word as an id and answer 404 for a screen that exists.
+ */
+notificationsRouter.get('/:id', async (req, res, next) => {
+  try {
+    if (!z.string().uuid().safeParse(req.params.id).success) throw new ApiError(404, 'Notification not found');
+    const { data, error } = await requireDb().from('notifications').select('*')
+      .eq('id', req.params.id).eq('recipient_user_id', req.auth.userId).maybeSingle();
+    if (error) throw new ApiError(500, error.message);
+    if (!data) throw new ApiError(404, 'Notification not found');
+    res.json({ data });
+  } catch (e) { next(e); }
+});
+
+/**
+ * A switch sends a JSON boolean, but `z.coerce.boolean()` would read the string "false" as true —
+ * the one way a preference can be saved as its own opposite.
+ */
+function flag(fallback) {
+  return z.preprocess((value) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    if (value === undefined || value === null) return fallback;
+    return value;
+  }, z.boolean());
+}
 
 function statusLabel(status) {
   return String(status || '').replace(/_/g, ' ');

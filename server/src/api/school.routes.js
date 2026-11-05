@@ -18,6 +18,7 @@ import { reclaimIdentity, temporaryPassword } from '../services/authIdentity.js'
 import { listTeacherStaff } from '../services/staffRoles.js';
 import { sendAccountConfirmation } from '../services/accountEmails.js';
 import { alertUsers } from '../services/notify.js';
+import { notificationOpsReady } from '../services/schemaSupport.js';
 import { env } from '../config/env.js';
 
 export const schoolRouter = Router();
@@ -228,8 +229,18 @@ schoolRouter.patch('/settings', requirePermission('school.edit'), async (req, re
       grading_configuration: z.object({}).passthrough().optional(),
       attendance_configuration: z.object({}).passthrough().optional(),
       branding: z.object({}).passthrough().optional(),
+      // The four switches the notification scheduler reads; see notificationScheduler.js.
+      notification_configuration: z.object({
+        lesson_reminders: z.boolean().optional(),
+        lesson_lead_minutes: z.coerce.number().int().min(1).max(180).optional(),
+        assignment_reminder_hours: z.coerce.number().int().min(1).max(336).optional(),
+        subscription_alerts: z.boolean().optional(),
+      }).optional(),
     }).parse(req.body);
     const supabase = requireDb();
+    if (payload.notification_configuration && !(await notificationOpsReady())) {
+      throw new ApiError(409, 'Automated notices need supabase/migrations/0025_notification_ops.sql.');
+    }
     const { data: cur } = await supabase.from('school_settings').select('id').eq('school_id', req.auth.schoolId).maybeSingle();
     let data;
     if (cur) {
