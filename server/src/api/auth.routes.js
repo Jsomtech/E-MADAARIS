@@ -9,6 +9,7 @@ import { clearIssuedCredential } from '../services/credentialVault.js';
 import { sendMail } from '../services/mailer.js';
 import { derivePrimaryRole } from '../services/provisioning.js';
 import { readSiteContent } from '../services/siteContent.js';
+import { readConfirmToken } from '../services/accountEmails.js';
 
 export const authRouter = Router();
 export const publicRouter = Router();
@@ -159,6 +160,53 @@ authRouter.post('/exchange-code', async (req, res, next) => {
     const { data, error } = await anon.auth.exchangeCodeForSession(code);
     if (error) throw new ApiError(400, error.message);
     res.json({ data: { tokens: { accessToken: data.session.access_token, refreshToken: data.session.refresh_token } } });
+  } catch (e) { next(e); }
+});
+
+// Account confirmation: the link in the "your account was created" email proves the address is
+// reachable. The token is signed by the platform, so this endpoint is public and needs no session.
+authRouter.post('/confirm-email', async (req, res, next) => {
+  try {
+    const { token } = z.object({ token: z.string().min(10) }).parse(req.body);
+    const link = readConfirmToken(token);
+    if (!link) throw new ApiError(400, 'This confirmation link is invalid or has expired. Ask your administrator to send it again.');
+    const supabase = requireDb();
+    const { data: membership } = await supabase
+      .from('school_users')
+      .select('id, auth_user_id, full_name, email, school_id, status, email_verified')
+      .eq('id', link.membershipId).eq('school_id', link.schoolId).maybeSingle();
+    if (!membership) throw new ApiError(400, 'That account no longer exists.');
+
+    // A pending membership cannot sign in, so confirming the address is what unlocks the account.
+    const { data: updated } = await supabase.from('school_users')
+      .update({
+        email_verified: true,
+        ...(membership.status === 'pending_verification' ? { status: 'active' } : {}),
+      })
+      .eq('id', membership.id).eq('school_id', link.schoolId)
+      .select('full_name, email').maybeSingle();
+    if (!updated) throw new ApiError(500, 'Could not record the confirmation. Please try again.');
+
+    // GoTrue keeps its own flag on the address; a confirmed identity is never asked to re-confirm.
+    if (membership.auth_user_id && !membership.email_verified) {
+      await supabase.auth.admin.updateUserById(membership.auth_user_id, { email_confirm: true })
+        .catch((error) => req.log?.warn({ err: error }, 'auth email confirmation could not be mirrored'));
+    }
+
+    const { data: school } = await supabase.from('schools')
+      .select('school_name').eq('id', link.schoolId).maybeSingle();
+    await audit(req, {
+      module: 'auth', action: 'confirmed', recordId: membership.id,
+      summary: `${updated.email} confirmed this school account`,
+    });
+    res.json({
+      data: {
+        fullName: updated.full_name,
+        email: updated.email,
+        schoolName: school?.school_name || null,
+        alreadyConfirmed: membership.email_verified === true,
+      },
+    });
   } catch (e) { next(e); }
 });
 

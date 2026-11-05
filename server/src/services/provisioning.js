@@ -3,6 +3,7 @@ import { DEFAULT_ROLE_PERMISSIONS, ROLE_NAMES } from '../config/roleDefaults.js'
 import { sendMail } from './mailer.js';
 import { setIssuedCredential } from './credentialVault.js';
 import { reclaimIdentity, temporaryPassword } from './authIdentity.js';
+import { sendAccountConfirmation } from './accountEmails.js';
 import { env } from '../config/env.js';
 
 // Unambiguous alphabet (no 0/O, 1/I) so the printed reference stays easy to read.
@@ -169,6 +170,7 @@ export async function provisionSchool({ registration, adminUser }, { actor } = {
 
   await assignRole(school.id, adminMembership.id, ROLE_NAMES.school_admin);
 
+  let confirmationEmail = null;
   if (usableNow) {
     try {
       await setIssuedCredential(adminAuthUser.id, {
@@ -176,23 +178,41 @@ export async function provisionSchool({ registration, adminUser }, { actor } = {
         password: registration.admin_password || handedPassword,
       });
     } catch { /* a missing vault key must not undo the school creation */ }
-  }
 
-  if (!usableNow) {
-    await sendMail({
+    // The administrator was created with a password, so nothing else would ever reach them:
+    // this mail is how they learn the school exists, what to sign in with, and that the
+    // address is theirs to confirm.
+    confirmationEmail = await sendAccountConfirmation({
+      template: 'school_account_confirmation',
       to: registration.admin_email,
-      template: 'staff_invitation',
-      variables: {
-        user_name: registration.admin_full_name,
-        school_name: school.school_name,
-        role: 'School Administrator',
-        invitation_link: activationLink || `${env.frontendUrl}/login`,
-        expires_at: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
-      },
+      name: registration.admin_full_name,
+      schoolName: school.school_name,
+      role: 'School Administrator',
+      loginEmail: registration.admin_email,
+      password: registration.admin_password || handedPassword,
+      membershipId: adminMembership.id,
+      schoolId: school.id,
     });
+  } else {
+    try {
+      const result = await sendMail({
+        to: registration.admin_email,
+        template: 'staff_invitation',
+        variables: {
+          user_name: registration.admin_full_name,
+          school_name: school.school_name,
+          role: 'School Administrator',
+          invitation_link: activationLink || `${env.frontendUrl}/login`,
+          expires_at: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
+        },
+      });
+      confirmationEmail = { status: result?.sent ? 'sent' : 'logged', to: registration.admin_email };
+    } catch (error) {
+      confirmationEmail = { status: 'failed', reason: error.message, to: registration.admin_email };
+    }
   }
 
-  return { school, subscriptionError: subError, activationLink, temporaryAdminPassword: handedPassword };
+  return { school, subscriptionError: subError, activationLink, temporaryAdminPassword: handedPassword, confirmationEmail };
 }
 
 /** Creates the 17 system roles + their default permission grants for a school. Idempotent. */

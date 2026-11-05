@@ -16,6 +16,7 @@ import { createBackup, listBackups, getBackupPayload } from '../services/backups
 import { clearSchoolData } from '../services/schoolData.js';
 import { reclaimIdentity, temporaryPassword } from '../services/authIdentity.js';
 import { listTeacherStaff } from '../services/staffRoles.js';
+import { sendAccountConfirmation } from '../services/accountEmails.js';
 import { env } from '../config/env.js';
 
 export const schoolRouter = Router();
@@ -684,8 +685,24 @@ schoolRouter.post('/users', requirePermission('users.create'), async (req, res, 
     try {
       await setIssuedCredential(authUserId, { schoolId, membershipId: su.id, password: body.password });
     } catch (error) { req.log?.warn({ err: error }, 'issued credential could not be sealed'); }
-    await audit(req, { module: 'users', action: 'created', recordId: su.id, summary: `${body.email} as ${body.role} (password set by admin)` });
-    res.status(201).json({ data: { user: su } });
+    // The staff member never chose this password and has no other way to learn it, so the first sign-in
+    // details go to their email. A failure here must not undo the account the school just created.
+    const confirmationEmail = await sendAccountConfirmation({
+      template: 'staff_account_confirmation',
+      to: body.email,
+      name: body.full_name,
+      schoolName: req.auth.school.school_name,
+      role: body.role,
+      loginEmail: body.email,
+      password: body.password,
+      membershipId: su.id,
+      schoolId,
+    });
+    await audit(req, {
+      module: 'users', action: 'created', recordId: su.id,
+      summary: `${body.email} as ${body.role} (password set by admin, confirmation email ${confirmationEmail.status})`,
+    });
+    res.status(201).json({ data: { user: su, confirmationEmail } });
   } catch (e) { next(e); }
 });
 

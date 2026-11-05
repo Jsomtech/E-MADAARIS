@@ -227,9 +227,14 @@ platformRouter.post('/schools', requireSuperAdmin, async (req, res, next) => {
       admin_password: z.string().min(8).max(72).optional(),
       plan_id: z.string().uuid(),
     }).parse(req.body);
-    const { school, activationLink } = await provisionSchool({ registration: { ...body, plan_id: body.plan_id } });
-    await audit(req, { module: 'schools', action: 'created', recordId: school.id, summary: `Manual tenant: ${school.school_name}` });
-    res.status(201).json({ data: { school, activationLink } });
+    const {
+      school, activationLink, temporaryAdminPassword, confirmationEmail,
+    } = await provisionSchool({ registration: { ...body, plan_id: body.plan_id } });
+    await audit(req, {
+      module: 'schools', action: 'created', recordId: school.id,
+      summary: `Manual tenant: ${school.school_name} (administrator confirmation email ${confirmationEmail?.status || 'unknown'})`,
+    });
+    res.status(201).json({ data: { school, activationLink, temporaryAdminPassword, confirmationEmail } });
   } catch (e) { next(e); }
 });
 

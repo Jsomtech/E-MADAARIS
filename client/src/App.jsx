@@ -22,6 +22,7 @@ const Verify = lazy(() => import('./pages/public/Verify.jsx'));
 const Login = lazy(() => import('./pages/auth/Login.jsx'));
 const ResetPassword = lazy(() => import('./pages/auth/ResetPassword.jsx'));
 const AcceptInvite = lazy(() => import('./pages/auth/AcceptInvite.jsx'));
+const ConfirmEmail = lazy(() => import('./pages/auth/ConfirmEmail.jsx'));
 
 const AccountPage = lazy(() => import('./pages/AccountPage.jsx'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage.jsx'));
@@ -88,6 +89,7 @@ export default function App() {
           <Route path="login" element={<Login />} />
           <Route path="auth/reset-password" element={<ResetPassword />} />
           <Route path="auth/accept-invite" element={<AcceptInvite />} />
+          <Route path="auth/confirm-email" element={<ConfirmEmail />} />
         </Route>
 
         {/* ── Authenticated application ─────────────────────────── */}

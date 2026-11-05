@@ -504,8 +504,19 @@ function StaffModal({ open, seatsFull, onClose, onDone }) {
       if (values.phone.trim()) base.phone = values.phone.trim();
       if (values.job_title.trim()) base.job_title = values.job_title.trim();
       if (values.department_id) base.department_id = values.department_id;
-      await apiPost('/school/users', { ...base, password: values.password });
-      toast.success(t('sections.staffCreated', { defaultValue: 'Account created for {{name}}. Share the password with them securely.', name: base.full_name }));
+      const { data } = await apiPost('/school/users', { ...base, password: values.password });
+      // The account email is what tells the new staff member their address and first password, so say
+      // plainly whether it reached them or only the server log.
+      const mail = data?.confirmationEmail;
+      if (mail?.status === 'sent') {
+        toast.success(t('sections.staffMailSent', { defaultValue: 'Account created. A confirmation email with the sign-in details was sent to {{email}}.', email: base.email }));
+      } else if (mail?.status === 'logged') {
+        toast.warn(t('sections.staffMailLogged', { defaultValue: 'Account created, but email delivery is not configured on this server — the confirmation email was not sent. Share the password with them securely.' }));
+      } else if (mail?.status === 'failed') {
+        toast.warn(t('sections.staffMailFailed', { defaultValue: 'Account created, but the confirmation email failed: {{reason}}. Share the password with them securely.', reason: mail.reason || 'mail provider error' }));
+      } else {
+        toast.success(t('sections.staffCreated', { defaultValue: 'Account created for {{name}}. Share the password with them securely.', name: base.full_name }));
+      }
       onDone();
     } catch (e) {
       if (e.status === 409) setError(t('sections.emailTaken', { defaultValue: e.message }));

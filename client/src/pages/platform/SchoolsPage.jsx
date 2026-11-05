@@ -375,6 +375,15 @@ function SchoolFormModal({ state, onClose, onSaved }) {
         } else {
           toast.info(t('platform.credentialsReady', { defaultValue: 'The administrator can sign in with the email and password you set.' }));
         }
+        // The account email carries the first password, so whether it left the server matters.
+        const mail = data?.confirmationEmail;
+        if (mail?.status === 'sent') {
+          toast.success(t('platform.confirmMailSent', { defaultValue: 'Confirmation email sent to {{email}}.', email: mail.to }));
+        } else if (mail?.status === 'logged') {
+          toast.warning(t('platform.confirmMailLogged', { defaultValue: 'The confirmation email was not delivered — email delivery is not configured on this server. Pass the sign-in details to the administrator another way.' }));
+        } else if (mail?.status === 'failed') {
+          toast.error(t('platform.confirmMailFailed', { defaultValue: 'The confirmation email could not be sent: {{reason}}', reason: mail.reason || 'mail provider error' }));
+        }
       } else {
         const body = {};
         for (const f of PROFILE_FIELDS) {
