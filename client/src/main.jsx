@@ -7,6 +7,12 @@ import './i18n/index.js';
 import './styles/app.css';
 import App from './App.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
+import { registerServiceWorker } from './services/pwa.js';
+
+// The worker is what makes this an installable, offline-capable app, and it also carries background
+// push. Registering it on boot (not on sign-in) means the public pages cache too and a staff tablet
+// opens straight to the last screen it showed.
+registerServiceWorker();
 
 // After a dev-server restart or a new deployment the hashed chunks in an open tab
 // no longer exist; reload once instead of leaving a blank dashboard.

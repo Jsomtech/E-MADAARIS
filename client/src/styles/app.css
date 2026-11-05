@@ -415,6 +415,11 @@ textarea.form-control { min-height: 70px; resize: vertical; }
 .dropdown-panel .dropdown-item:hover { background: var(--brand-wash); color: var(--brand); }
 .dropdown-panel .dropdown-item.text-danger:hover { background: #fdecec; color: var(--danger) !important; }
 
+/* Unread inbox rows in the bell dropdown; the class keeps the hover state visible. */
+.notification-row { background: transparent; cursor: pointer; transition: background 0.12s ease; }
+.notification-row.is-unread { background: var(--brand-wash); }
+.notification-row:hover { background: var(--brand-soft); }
+
 /* ── Modals ──────────────────────────────────────────────────── */
 .em-modal-backdrop {
   position: fixed; inset: 0; z-index: 1200;

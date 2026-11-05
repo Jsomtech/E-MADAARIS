@@ -31,6 +31,17 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('emadaaris:signed-out', onSignedOut);
   }, []);
 
+  // A push token identifies the browser, not the person, so every sign-in moves this device onto the
+  // account now holding the keyboard. Without it, a shared staff tablet keeps alerting the last user.
+  useEffect(() => {
+    if (!profile?.userId) return undefined;
+    let alive = true;
+    import('../services/push.js')
+      .then((service) => { if (alive) service.resyncPushToken(); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [profile?.userId]);
+
   const login = useCallback(async (email, password, { remember = false } = {}) => {
     const { data } = await apiPost('/auth/login', { email, password });
     tokens.set(data.tokens, { remember });

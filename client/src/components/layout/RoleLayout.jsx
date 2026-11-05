@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-  Bell, ChevronDown, Languages, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Search, User, X,
+  Bell, ChevronDown, Download, Languages, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Search, User, WifiOff, X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { toast } from 'react-toastify';
@@ -12,6 +12,7 @@ import { apiPost } from '../../api/client.js';
 import { useApi } from '../../hooks/useApi.js';
 import { humanize } from '../../config/resources.jsx';
 import BrandLogo from '../brand/BrandLogo.jsx';
+import { isRunningStandalone, promptInstall, watchInstallable, watchOnline } from '../../services/pwa.js';
 
 function initials(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
@@ -52,14 +53,29 @@ function NotificationBell() {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
-  const { data, loading } = useApi('/school/notifications', { limit: 8 }, true);
+  const navigate = useNavigate();
+  const { data, loading, refetch } = useApi('/school/notifications', { limit: 8 }, true);
   useEffect(() => {
     const onClick = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', onClick);
     return () => document.removeEventListener('mousedown', onClick);
   }, []);
+  // A push that lands while the tab is open has already been written to the inbox, so the badge can
+  // catch up instead of waiting for the next page load.
+  useEffect(() => {
+    const onPush = () => refetch();
+    window.addEventListener('emadaaris:push', onPush);
+    return () => window.removeEventListener('emadaaris:push', onPush);
+  }, [refetch]);
   const items = Array.isArray(data) ? data : [];
   const unread = items.filter((i) => !i.is_read).length;
+
+  const openItem = (event, n) => {
+    event.preventDefault();
+    if (!n.is_read) apiPost(`/school/notifications/${n.id}/read`, {}).then(refetch).catch(() => {});
+    setOpen(false);
+    navigate(n.link || '/notifications');
+  };
 
   return (
     <div className="position-relative" ref={ref}>
@@ -85,10 +101,11 @@ function NotificationBell() {
           {!loading && !items.length && <div className="small text-muted px-2 pb-2">{t('common.none')}</div>}
           <div style={{ maxHeight: 320, overflowY: 'auto' }}>
             {items.slice(0, 8).map((n) => (
-              <div key={n.id} className="p-2 rounded-3 mb-1" style={{ background: n.is_read ? 'transparent' : 'var(--brand-wash)' }}>
+              <button type="button" key={n.id} onClick={(e) => openItem(e, n)}
+                className={clsx('notification-row w-100 text-start border-0 p-2 rounded-3 mb-1', !n.is_read && 'is-unread')}>
                 <div className="small fw-semibold">{n.title}</div>
                 {n.body && <div className="small text-muted">{String(n.body).slice(0, 120)}</div>}
-              </div>
+              </button>
             ))}
           </div>
           <Link to="/notifications" className="d-block text-center small mt-1 pb-1">{t('common.viewAll')}</Link>
@@ -169,6 +186,22 @@ export default function RoleLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [query, setQuery] = useState('');
+  const [installable, setInstallable] = useState(false);
+  const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
+
+  useEffect(() => {
+    if (isRunningStandalone()) return undefined;
+    return watchInstallable(setInstallable);
+  }, []);
+
+  useEffect(() => watchOnline(setOnline), []);
+
+  const install = async () => {
+    const outcome = await promptInstall();
+    if (outcome === 'accepted') {
+      toast.success(t('pwa.installing', { defaultValue: 'E-MADAARIS is being added to this device' }));
+    }
+  };
 
   const toggleCollapsed = () => setCollapsed((prev) => {
     const next = !prev;
@@ -182,7 +215,7 @@ export default function RoleLayout() {
   useEffect(() => { setMobileOpen(false); }, [location.pathname]);
 
   // Background pushes are shown by the service worker; while the tab is focused
-  // FCM delivers to the page instead, so surface those as a toast.
+  // FCM delivers to the page instead, so surface those as a toast the user can click through.
   useEffect(() => {
     let unlisten;
     let alive = true;
@@ -191,14 +224,19 @@ export default function RoleLayout() {
         if (!alive || !service.isPushConfigured) return;
         unlisten = await service.listenForForegroundMessages((payload) => {
           const notification = payload?.notification || {};
-          const title = notification.title || payload?.data?.title;
+          const data = payload?.data || {};
+          const title = notification.title || data.title;
           if (!title) return;
-          toast.info(notification.body ? `${title} — ${notification.body}` : title);
+          const body = notification.body || data.body || '';
+          window.dispatchEvent(new Event('emadaaris:push'));
+          toast.info(body ? `${title} — ${body}` : title, {
+            onClick: () => navigate(data.url || data.link || '/notifications'),
+          });
         });
       })
       .catch(() => {});
     return () => { alive = false; if (typeof unlisten === 'function') unlisten(); };
-  }, []);
+  }, [navigate]);
 
   const signOut = async () => { await logout(); navigate('/login'); };
   const toggleLang = () => i18n.changeLanguage(i18n.language === 'so' ? 'en' : 'so');
@@ -234,6 +272,18 @@ export default function RoleLayout() {
               <input className="form-control" placeholder={t('common.search')} value={query} onChange={(e) => setQuery(e.target.value)} />
             </div>
           </form>
+          {!online && (
+            <span className="badge text-bg-warning align-self-center d-inline-flex align-items-center gap-1"
+              title={t('pwa.offlineHint', { defaultValue: 'No connection. The pages you opened are still available; saved data needs the network.' })}>
+              <WifiOff size={12} /> <span className="d-none d-md-inline">{t('pwa.offline', { defaultValue: 'Offline' })}</span>
+            </span>
+          )}
+          {installable && (
+            <button type="button" className="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1" onClick={install}
+              title={t('pwa.installHint', { defaultValue: 'Put E-MADAARIS on this device and open it in its own window' })}>
+              <Download size={14} /> <span className="d-none d-lg-inline">{t('pwa.install', { defaultValue: 'Install app' })}</span>
+            </button>
+          )}
           <NotificationBell />
           <button type="button" className="lang-btn" onClick={toggleLang} title={t('common.language')}>
             <Languages size={15} />{i18n.language.toUpperCase()}

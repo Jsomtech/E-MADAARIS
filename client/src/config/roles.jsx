@@ -43,6 +43,7 @@ export const ROLE_CONFIG = {
         custom('analytics', '/platform/analytics', 'platform.analytics.view', 'analytics'),
         custom('tickets', '/platform/tickets', 'platform.tickets.manage', 'support'),
         custom('content', '/platform/content', 'platform.dashboard.view', 'content'),
+        custom('broadcast', '/platform/broadcast', 'platform.dashboard.view', 'announcements'),
         custom('transfers', '/platform/transfers', 'platform.schools.view', 'transfers'),
         custom('elections', '/platform/elections', 'platform.dashboard.view', 'elections'),
         custom('backups', '/platform/backups', 'platform.dashboard.view', 'backups'),

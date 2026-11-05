@@ -179,6 +179,7 @@
     "myFamily": "My family"
   },
   "modules": {
+    "broadcast": "Broadcast",
     "students": "Students",
     "admissions": "Admissions",
     "transfers": "Student transfers",
@@ -675,5 +676,77 @@
       "resume": "The election is open again for that school.",
       "close": "The election is closed and the tally is final."
     }
+  },
+  "notifications": {
+    "subtitle": "Messages routed to your account only.",
+    "unreadOnly": "Unread only",
+    "markAllRead": "Mark all as read",
+    "markRead": "Mark read",
+    "deviceTitle": "This device and the sender",
+    "sendTest": "Send a test notification",
+    "deviceSettings": "Turn push on for this browser",
+    "testSent": "A test notification was pushed to {{count}} device(s)",
+    "noDevices": "No browser is registered on this account yet. Turn push on below and try again.",
+    "testFailed": "The server could not deliver the test notification.",
+    "senderReady": "The server can send pushes. This account has no browser registered yet.",
+    "liveOnDevices": "Push is live: the server is configured and this account has {{count}} browser(s) registered.",
+    "preferencesTitle": "What reaches you",
+    "preferencesHint": "In-app decides whether a message appears in this list at all. Email sends a copy as well.",
+    "inApp": "In-app",
+    "categories": {
+      "general": "General",
+      "account": "Account",
+      "attendance": "Attendance",
+      "timetable": "Timetable",
+      "academic": "Academic",
+      "results": "Results",
+      "finance": "Finance",
+      "announcements": "Announcements",
+      "elections": "Elections",
+      "support": "Support"
+    }
+  },
+  "pwa": {
+    "install": "Install app",
+    "installHint": "Put E-MADAARIS on this device and open it in its own window",
+    "installing": "E-MADAARIS is being added to this device",
+    "offline": "Offline",
+    "offlineHint": "No connection. The pages you opened are still available; saved data needs the network."
+  },
+  "broadcast": {
+    "title": "Broadcast a notice",
+    "subtitle": "One message to a school, to a role, to every school, or to the platform team. Each tenant keeps its own copy and its own opt-outs.",
+    "audience": "Who receives it",
+    "targets": {
+      "all_schools": "All schools",
+      "one_school": "One school",
+      "platform_team": "Platform team"
+    },
+    "roles": "Roles",
+    "rolesHint": "Leave all unchecked to reach every active member.",
+    "noRoles": "No roles to offer yet — pick a school that has members.",
+    "subject": "Subject",
+    "subjectExample": "Maintenance window tonight at 22:00",
+    "message": "Message",
+    "link": "Open this page when clicked",
+    "emailCopy": "Also send an email to those who opted in",
+    "noEmailTeam": "Team notices stay in-app; no email copy is sent.",
+    "sendsTo": "Going to",
+    "sendNow": "Send broadcast",
+    "platformTeam": "the platform team",
+    "allSchools": "every active school",
+    "everyMember": "all active members",
+    "titleNeeded": "Write a subject — it is the first line of the notice.",
+    "schoolNeeded": "Pick the school that should receive this.",
+    "sent": "Sent to {{audiences}} audience(s), {{delivered}} inbox rows.",
+    "audiences": "Audiences",
+    "inboxRows": "Inbox rows",
+    "idleHint": "Send a notice to see the counts.",
+    "pushOutcome": "Push delivery",
+    "noPushYet": "Nothing sent from this screen yet.",
+    "pushCounts": "{{attempted}} attempted · {{sent}} delivered · {{failed}} failed",
+    "perTenant": "Per school",
+    "failed": "Not delivered",
+    "delivered": "Delivered"
   }
 }

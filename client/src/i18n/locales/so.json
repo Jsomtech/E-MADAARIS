@@ -179,6 +179,7 @@
     "myFamily": "Qoyskayga"
   },
   "modules": {
+    "broadcast": "Baahin",
     "students": "Ardayda",
     "admissions": "Diiwaangelinta",
     "transfers": "Wareejinta ardayda",
@@ -675,5 +676,77 @@
       "resume": "Doorashadu dib bay ugu furantay dugsigaas.",
       "close": "Doorashada waa la xiray waana la soo afjaray tirinta."
     }
+  },
+  "notifications": {
+    "subtitle": "Fariimaha loo soo wajahay akoonkaaga oo keliya.",
+    "unreadOnly": "Kuwa aan la akhrin",
+    "markAllRead": "Calaamadee dhammaan in la akhriyay",
+    "markRead": "Calaamadee la akhriyay",
+    "deviceTitle": "Aaladdan iyo server-ka",
+    "sendTest": "Dir fariin tijaabo ah",
+    "deviceSettings": "Fur ogeysiisyada browser-kan",
+    "testSent": "Fariin tijaabo ah waxaa la geeyay {{count}} browser.",
+    "noDevices": "Weli browser ku diiwaangashan ma jiro. Fur ogeysiisyada ka dibna mar kale isku day.",
+    "testFailed": "Server-ku ma gudbin karin fariinta tijaabada ah.",
+    "senderReady": "Server-ku wuu diri karaa ogeysiisyo. Akoonkani weli ma diiwaangelin browser.",
+    "liveOnDevices": "Ogeysiisyadu way shaqaynayaan: server-ku waa diyaar, akoonkana wuxuu diiwaangeliyay {{count}} browser.",
+    "preferencesTitle": "Waxa kugu soo gaadha",
+    "preferencesHint": "Ablikishinka gudihiis ayaa go'aamiya in fariintu liistakan soo gasho; email-na waa koobi dheeraad ah.",
+    "inApp": "Ablikishinka gudihiis",
+    "categories": {
+      "general": "Guud",
+      "account": "Akoonka",
+      "attendance": "Joogitaanka",
+      "timetable": "Jadwalka",
+      "academic": "Waxbarashada",
+      "results": "Natiijooyinka",
+      "finance": "Maaliyadda",
+      "announcements": "Ogeysiisyada",
+      "elections": "Doorashooyinka",
+      "support": "Taageerada"
+    }
+  },
+  "pwa": {
+    "install": "Rakib ablikishinka",
+    "installHint": "E-MADAARIS ku dar aaladdan oo ku fur daaqad u gaar ah.",
+    "installing": "E-MADAARIS waxaa lagu darayaa aaladdan.",
+    "offline": "Internet ma jiro",
+    "offlineHint": "Xiriir ma jiro. Bogagga aad hore u furtay way diyaar yihiin; xogta cusub waxay u baahan tahay internet."
+  },
+  "broadcast": {
+    "title": "Baahin dir",
+    "subtitle": "Hal fariin oo loo diro dugsi, door, dhammaan dugsiyada, ama kooxda madalka. Dugsi kastaa wuxuu haystaa koobigiisa iyo doorashadiisa.",
+    "audience": "Cida hesha",
+    "targets": {
+      "all_schools": "Dhammaan dugsiyada",
+      "one_school": "Dugsi keliya",
+      "platform_team": "Kooxda madalka"
+    },
+    "roles": "Doorarka",
+    "rolesHint": "Waxba ha doorin si ay u gaadho xubnaha firfircoon dhammaan.",
+    "noRoles": "Weli door la soo bandhigo ma jiro — dooro dugsi leh xubno.",
+    "subject": "Cunsur",
+    "subjectExample": "Dayactir caawa 22:00",
+    "message": "Fariinta",
+    "link": "Bogga la furayo marka la riixo",
+    "emailCopy": "Email u dir kuwa doorbiday",
+    "noEmailTeam": "Fariimaha kooxdu waxay ku ekaadaan ablikishinka gudihiis; email lama diro.",
+    "sendsTo": "Waxay u socotaa",
+    "sendNow": "Dir baahinta",
+    "platformTeam": "Kooxda madalka",
+    "allSchools": "Dhammaan dugsiyada firfircoon",
+    "everyMember": "Xubnaha firfircoon dhammaan",
+    "titleNeeded": "Qor cunsur — waa safka hore ee fariinta.",
+    "schoolNeeded": "Dooro dugsiga hesha.",
+    "sent": "Waxaa loo diray {{audiences}} kooxood, {{delivered}} fariimood.",
+    "audiences": "Kooxaha la gaadhay",
+    "inboxRows": "Fariimaha la diray",
+    "idleHint": "Baahin dir si aad u aragto tirada.",
+    "pushOutcome": "Gudbinta ogeysiiska",
+    "noPushYet": "Weli wax lagama dirin shaashaddan.",
+    "pushCounts": "{{attempted}} la isku dayay · {{sent}} la gaadhiyay · {{failed}} guuldarraystay",
+    "perTenant": "Dugsi kastaba",
+    "failed": "Aan la gaadhin",
+    "delivered": "La gaadhiyay"
   }
 }
