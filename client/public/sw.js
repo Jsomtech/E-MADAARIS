@@ -29,8 +29,17 @@ const SHELL_FILES = [
 const STATIC_ASSET = /\.(?:css|js|mjs|png|jpe?g|webp|svg|woff2?|ico|webmanifest)$/i;
 const OWN_CACHES = [SHELL_CACHE, ASSETS_CACHE];
 
+/**
+ * services/pwa.js appends `?dev=1` when the page came from the Vite dev server. There the module graph
+ * is regenerated on every restart, so a cached copy of the last one hands the browser two instances of
+ * the same library — which is how a page ends up blank with "pass in an i18next instance". The worker
+ * still registers, because it is also the Firebase push worker, but it neither caches nor intercepts.
+ */
+const DEV_MODE = new URLSearchParams(self.location.search).get('dev') === '1';
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
+    if (DEV_MODE) return self.skipWaiting();
     const cache = await caches.open(SHELL_CACHE);
     // One entry missing (a favicon on a fresh deploy) must not abandon the rest of the shell.
     await Promise.allSettled(SHELL_FILES.map((path) => cache.add(path)));
@@ -41,6 +50,11 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     for (const key of await caches.keys()) {
+      if (DEV_MODE) {
+        // A dev run must not inherit the last deployment's shell.
+        if (key.startsWith('emadaaris-')) await caches.delete(key);
+        continue;
+      }
       if (!key.startsWith('emadaaris-') || OWN_CACHES.includes(key)) continue;
       await caches.delete(key);
     }
@@ -103,6 +117,7 @@ self.addEventListener('notificationclick', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  if (DEV_MODE) return;
   const { request } = event;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);

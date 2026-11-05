@@ -24,6 +24,9 @@ function workerUrl() {
   for (const [key, value] of Object.entries(firebaseConfig)) {
     if (key !== 'vapidKey' && value) params.set(key, value);
   }
+  // A dev server hands out a different module graph on every restart, so the worker must not keep a
+  // copy of the previous one. Production gets no flag and caches the shell exactly as before.
+  if (import.meta.env.DEV) params.set('dev', '1');
   const query = params.toString();
   return query ? `/sw.js?${query}` : '/sw.js';
 }
