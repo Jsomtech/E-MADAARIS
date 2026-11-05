@@ -30,6 +30,12 @@ export const env = {
     return Math.min(Math.max(raw, 15 * 60000), 30 * 86400000);
   })(),
   paymentProvider: process.env.PAYMENT_PROVIDER || '',
+  // Push. Only a path is held in the environment — the service-account JSON stays on disk, its
+  // contents are read by services/fcm.js when a message is sent and never logged.
+  firebaseServiceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH
+    || process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
+  // Optional; the project id inside the service-account file is used when this is blank.
+  firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
   appBaseUrl: process.env.APP_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:5173',
   backupIntervalMs: Number(process.env.BACKUP_INTERVAL_MS || 10000),
   get configured() {

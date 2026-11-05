@@ -4,6 +4,9 @@ import { db } from '../config/supabase.js';
 import { ApiError } from '../middleware/error.js';
 import { resourceRouter, uuid, optionalId, trimStr, money } from '../core/crud.js';
 import { nextAdmissionNumber, visibleStudentIds, isPortalOnly, portalClassFilter, portalClassIds } from '../services/scopes.js';
+import {
+  alertUsers, audienceUserIds, notify, notifyLater, householdUserIdsForClasses,
+} from '../services/notify.js';
 import { provisionStudentAccount } from '../services/studentAccounts.js';
 import { studentsProfileColumns } from '../services/schemaSupport.js';
 
@@ -108,6 +111,23 @@ export function mountResources(api) {
       classroom_id: 'classrooms', period_id: 'timetable_periods', academic_year_id: 'academic_years',
     },
     ownFilter: (req) => portalClassFilter(req.auth),
+    // A slot being added, moved or dropped is worth telling the teacher about; a class-wide change is
+    // worth telling the families about. One cell is edited at a time in the grid, so this stays
+    // proportionate — it never fires per row of a bulk operation.
+    afterCreate: async (row, req) => {
+      if (!row.teacher_id) return;
+      notifyLater('timetable assignment alert', async () => {
+        const supabase = db();
+        return notify(supabase, [row.teacher_id], {
+          schoolId: req.auth.schoolId,
+          category: 'timetable',
+          title: `You are timetabled: ${await timetableLabel(supabase, row)}`,
+          body: [req.auth.school?.school_name, row.day_of_week].filter(Boolean).join(' · '),
+        });
+      }, req.log);
+    },
+    afterUpdate: async (row, req) => notifyTimetableChange(req, row, 'changed'),
+    afterDelete: async (row, req) => notifyTimetableChange(req, row, 'removed'),
   });
 
   // ── Students & guardians ─────────────────────────────────────
@@ -380,6 +400,17 @@ export function mountResources(api) {
       status: z.enum(['open', 'closed', 'archived']).optional(),
     }),
     beforeCreate: async (p, req) => { p.teacher_id = req.auth.userId; return p; },
+    // A deadline is the one school message a family cannot afford to miss.
+    afterCreate: async (row, req) => {
+      alertUsers(req, async (supabase, schoolId) => {
+        const households = await householdUserIdsForClasses(supabase, schoolId, [row.class_id]);
+        return households.filter((id) => id && id !== req.auth.userId);
+      }, {
+        category: 'academic',
+        title: `New assignment: ${row.title}`,
+        body: row.due_date ? `Hand it in by ${row.due_date}.` : 'Set for your class.',
+      });
+    },
     refs: { class_id: 'classes', subject_id: 'subjects' },
     ownFilter: (req) => portalClassFilter(req.auth),
   });
@@ -402,6 +433,19 @@ export function mountResources(api) {
     }),
     beforeCreate: async (p, req) => { p.created_by = req.auth.userId; return p; },
     refs: { class_id: 'classes' },
+    // Everyone the notice is addressed to, minus the person who wrote it.
+    afterCreate: async (row, req) => {
+      if (row.status === 'draft') return;
+      const authorId = req.auth.userId;
+      alertUsers(req, async (supabase, schoolId) => {
+        const ids = await audienceUserIds(supabase, schoolId, { audience: row.audience || 'all', classId: row.class_id || null });
+        return ids.filter((id) => id && id !== authorId);
+      }, {
+        category: 'announcements',
+        title: row.title,
+        body: noticePreview(row.body),
+      });
+    },
     modifyQuery: (q, req) => (isPortalOnly(req.auth) ? q.eq('status', 'published') : q),
     // School-wide notices plus the portal account's own class; never another class's notices.
     ownFilter: async (req) => {
@@ -666,4 +710,44 @@ async function adjustCopies(bookId, delta) {
   if (!book) return;
   const next = Math.max(0, Math.min(Number(book.total_copies), Number(book.available_copies) + delta));
   await db().from('library_books').update({ available_copies: next }).eq('id', book.id);
+}
+
+/** The announcement body as a lock-screen line: long notices are read on the page, not in the inbox. */
+function noticePreview(body) {
+  const text = String(body || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  return text.length > 180 ? `${text.slice(0, 177)}…` : text;
+}
+
+/** "Maths · Grade 9 · Monday 08:00" — what a timetable message is about, in the school's own words. */
+async function timetableLabel(supabase, entry) {
+  const [{ data: subject }, { data: cls }, { data: period }] = await Promise.all([
+    supabase.from('subjects').select('name').eq('id', entry.subject_id).maybeSingle(),
+    supabase.from('classes').select('name').eq('id', entry.class_id).maybeSingle(),
+    supabase.from('timetable_periods').select('name, start_time').eq('id', entry.period_id).maybeSingle(),
+  ]);
+  const when = [entry.day_of_week, period?.start_time ? String(period.start_time).slice(0, 5) : null]
+    .filter(Boolean).join(' ');
+  return [subject?.name || 'A lesson', cls?.name, when].filter(Boolean).join(' · ');
+}
+
+/**
+ * A slot that moved or disappeared: the teacher who loses or gains it, plus the class it belongs to.
+ * Everything, including the three lookups for the label, happens after the response.
+ */
+function notifyTimetableChange(req, entry, kind) {
+  if (!entry?.class_id) return;
+  const actorId = req.auth.userId;
+  notifyLater(`timetable ${kind} alert`, async () => {
+    const supabase = db();
+    const label = await timetableLabel(supabase, entry);
+    const ids = await audienceUserIds(supabase, req.auth.schoolId, { audience: 'class', classId: entry.class_id });
+    if (entry.teacher_id) ids.push(entry.teacher_id);
+    return notify(supabase, [...new Set(ids)].filter((id) => id && id !== actorId), {
+      schoolId: req.auth.schoolId,
+      category: 'timetable',
+      title: kind === 'removed' ? `Removed from the timetable: ${label}` : `Timetable changed: ${label}`,
+      body: `Updated by ${req.auth.fullName || 'school staff'}.`,
+    });
+  }, req.log);
 }

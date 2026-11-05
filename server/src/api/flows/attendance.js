@@ -5,10 +5,57 @@ import { ApiError } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import { audit } from '../../services/audit.js';
 import { teacherClassIds, visibleStudentIds } from '../../services/scopes.js';
+import {
+  notify, notifyLater, alertUsers, householdsByStudent, teacherUserIdsForClasses, userIdsWithRoles,
+} from '../../services/notify.js';
 
 export const attendanceRouter = Router();
 
 const STATUS = z.enum(['present', 'absent', 'late', 'excused']);
+
+/**
+ * Not the daily roll — the marks that keep a learner out of class, which is the message a family
+ * actually wants. Each note goes to that child's own household, never to the class. A day where half
+ * the register is missing stops being a flood: past this many learners the school gets one summary for
+ * its administrators and the class teacher instead of hundreds of pushes.
+ */
+const PERSONAL_ALERTS = 40;
+const ALERTED_STATUSES = { absent: 'absent', late: 'late' };
+
+function alertAbsentees(req, supabase, { classId, date, flagged }) {
+  if (!flagged.length) return;
+  const schoolId = req.auth.schoolId;
+  const statusOf = new Map(flagged.map((f) => [f.student_id, f.attendance_status]));
+  notifyLater('attendance alert', async () => {
+    if (flagged.length > PERSONAL_ALERTS) {
+      const { data: cls } = await supabase.from('classes').select('name').eq('id', classId).maybeSingle();
+      const [admins, teachers] = await Promise.all([
+        userIdsWithRoles(supabase, schoolId, ['school_admin', 'principal']),
+        teacherUserIdsForClasses(supabase, schoolId, [classId]),
+      ]);
+      return notify(supabase, [...new Set([...admins, ...teachers])], {
+        schoolId, category: 'attendance',
+        title: `${flagged.length} learners marked absent in ${cls?.name || 'a class'}`,
+        body: `${date} · this many follow-ups are waiting on one register.`,
+      });
+    }
+    const households = await householdsByStudent(supabase, schoolId, [...statusOf.keys()]);
+    const { data: students } = await supabase.from('students').select('id, full_name')
+      .eq('school_id', schoolId).in('id', [...households.keys()]);
+    const names = new Map((students || []).map((s) => [s.id, s.full_name]));
+    let last = null;
+    for (const [studentId, logins] of households) {
+      if (!logins.length) continue;
+      const status = ALERTED_STATUSES[statusOf.get(studentId)] || 'not present';
+      last = await notify(supabase, logins, {
+        schoolId, category: 'attendance',
+        title: `${names.get(studentId) || 'Your child'} was marked ${status}`,
+        body: `${date} · logged by ${req.auth.fullName || 'the class teacher'}.`,
+      });
+    }
+    return last;
+  }, req.log);
+}
 
 const pad = (n) => String(n).padStart(2, '0');
 const todayIso = () => {
@@ -106,6 +153,11 @@ attendanceRouter.post('/sessions', requirePermission('attendance.create'), async
     }));
     const { error: ie } = await supabase.from('attendance_records').insert(rows);
     if (ie) throw new ApiError(500, ie.message);
+    alertAbsentees(req, supabase, {
+      classId: body.class_id,
+      date: body.session_date,
+      flagged: body.records.filter((r) => ALERTED_STATUSES[r.attendance_status]),
+    });
     await audit(req, { module: 'attendance', action: 'submitted', recordId: session.id, summary: `${rows.length} students for ${body.session_date}` });
     res.json({ data: { session, saved: rows.length } });
   } catch (e) { next(e); }
@@ -261,6 +313,11 @@ attendanceRouter.post('/corrections/:id/review', requirePermission('attendance.a
         .eq('id', cor.attendance_record_id);
     }
     await audit(req, { module: 'attendance', action: `correction_${action}d`, recordId: cor.id });
+    alertUsers(req, [cor.requested_by].filter(Boolean), {
+      category: 'attendance',
+      title: `Attendance correction ${action === 'approve' ? 'approved' : 'rejected'}`,
+      body: `${cor.original_status} → ${cor.requested_status}.`,
+    });
     res.json({ data: { ok: true } });
   } catch (e) { next(e); }
 });

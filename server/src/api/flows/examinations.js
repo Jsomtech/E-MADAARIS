@@ -6,6 +6,9 @@ import { requirePermission } from '../../middleware/rbac.js';
 import { audit } from '../../services/audit.js';
 import { teacherClassIds, visibleStudentIds } from '../../services/scopes.js';
 import { assertSchoolRefs } from '../../services/tenantRefs.js';
+import {
+  alertUsers, notify, notifyLater, householdUserIdsForClasses, userIdsWithPermission, teacherUserIdsForClasses,
+} from '../../services/notify.js';
 
 export const examRouter = Router();
 const uuidz = z.string().uuid();
@@ -122,6 +125,20 @@ examRouter.post('/marks/submit', requirePermission('marks.submit'), async (req, 
       class_id: ecs.class_id, subject_id: ecs.subject_id, status: 'pending', submitted_by: req.auth.userId,
     }, { onConflict: 'examination_id,class_id,subject_id' });
     await audit(req, { module: 'results', action: 'submitted', recordId: ecs.id, summary: `${count} marks submitted for review` });
+    // The reviewer is the only person who can move this forward, so the queue is announced, not polled.
+    notifyLater('marks submitted alert', async () => {
+      const [{ data: exam }, { data: cls }, { data: sub }] = await Promise.all([
+        supabase.from('examinations').select('name').eq('id', ecs.examination_id).maybeSingle(),
+        supabase.from('classes').select('name').eq('id', ecs.class_id).maybeSingle(),
+        supabase.from('subjects').select('name').eq('id', ecs.subject_id).maybeSingle(),
+      ]);
+      const reviewers = await userIdsWithPermission(supabase, req.auth.schoolId, 'results.approve');
+      return notify(supabase, reviewers, {
+        schoolId: req.auth.schoolId, category: 'results',
+        title: `Results waiting for review: ${exam?.name || 'an examination'}`,
+        body: [cls?.name, sub?.name, `${count} marks`].filter(Boolean).join(' · '),
+      });
+    }, req.log);
     res.json({ data: { submitted: count } });
   } catch (e) { next(e); }
 });
@@ -146,6 +163,11 @@ examRouter.post('/results/:approvalId/review', requirePermission('results.approv
       .eq('school_id', req.auth.schoolId).eq('examination_id', ap.examination_id)
       .eq('class_id', ap.class_id || ap.class_id).eq('subject_id', ap.subject_id || ap.subject_id);
     await audit(req, { module: 'results', action: `${action}d`, recordId: ap.id, summary: `Result approval ${action}` });
+    alertUsers(req, [ap.submitted_by].filter((id) => id && id !== req.auth.userId), {
+      category: 'results',
+      title: `Your submitted results were ${action === 'approve' ? 'approved' : 'sent back'}`,
+      body: reason || (action === 'approve' ? 'They are now part of the report card.' : 'A reason was expected with the rejection.'),
+    });
     res.json({ data: { ok: true } });
   } catch (e) { next(e); }
 });
@@ -164,6 +186,18 @@ examRouter.post('/:id/publish', requirePermission('results.publish'), async (req
       .eq('id', exam.id).select().single();
     if (error) throw new ApiError(500, error.message);
     await audit(req, { module: 'results', action: 'published', recordId: exam.id, summary: `Published ${exam.name}` });
+    alertUsers(req, async (supabase, schoolId) => {
+      const { data: scoped } = await supabase.from('exam_class_subjects').select('class_id')
+        .eq('examination_id', exam.id).eq('school_id', schoolId).limit(500);
+      const classIds = [...new Set((scoped || []).map((row) => row.class_id).filter(Boolean))];
+      const households = await householdUserIdsForClasses(supabase, schoolId, classIds);
+      const teachers = await teacherUserIdsForClasses(supabase, schoolId, classIds);
+      return [...new Set([...households, ...teachers])].filter((id) => id && id !== req.auth.userId);
+    }, {
+      category: 'results',
+      title: `Results published: ${exam.name}`,
+      body: 'The report card for this examination is ready to view.',
+    });
     res.json({ data });
   } catch (e) { next(e); }
 });

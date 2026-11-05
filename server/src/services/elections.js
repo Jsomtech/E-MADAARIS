@@ -8,6 +8,7 @@
  * administrator ever receives.
  */
 import { ApiError } from '../middleware/error.js';
+import { notify } from './notify.js';
 
 export const ELECTION_MIGRATION = 'supabase/migrations/0022_elections.sql';
 
@@ -221,28 +222,15 @@ export async function saveResults(supabase, { schoolId, election, positions, sta
 }
 
 /**
- * Notifications. Students are addressed through their own school_users rows; the batch insert keeps
- * a whole-school announcement to a handful of round trips.
+ * Notifications. Students are addressed through their own school_users rows. The write goes through
+ * the shared notifier so an election message obeys a voter's preferences and reaches their registered
+ * browsers, exactly like every other school event.
  */
-const NOTIFY_BATCH = 200;
-
 export async function notifyRecipients(supabase, userIds, { schoolId, category, title, body, link }) {
-  const ids = [...new Set(userIds.filter(Boolean))];
-  for (let i = 0; i < ids.length; i += NOTIFY_BATCH) {
-    const rows = ids.slice(i, i + NOTIFY_BATCH).map((recipient_user_id) => ({
-      school_id: schoolId,
-      recipient_user_id,
-      recipient_scope: 'school',
-      category,
-      title,
-      body,
-      link,
-      is_read: false,
-    }));
-    const { error } = await supabase.from('notifications').insert(rows);
-    if (error) return { sent: 0, error: error.message };
-  }
-  return { sent: ids.length, error: null };
+  const summary = await notify(supabase, userIds, {
+    schoolId, category: category || 'elections', title, body, link,
+  });
+  return { sent: summary.inserted, error: summary.error || null };
 }
 
 export async function studentUserIds(supabase, schoolId, { candidatesOnly = false, electionId = null } = {}) {

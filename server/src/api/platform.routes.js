@@ -16,6 +16,7 @@ import {
   readSiteContent, writeSiteContent, clearSiteContent, assertSiteContent,
 } from '../services/siteContent.js';
 import { listAll as listAllTransfers, getTransfer } from '../services/transfers.js';
+import { alertUsers, notify, userIdsWithRoles } from '../services/notify.js';
 
 export const platformRouter = Router();
 platformRouter.use(requirePlatform());
@@ -93,6 +94,12 @@ platformRouter.post('/applications/:id/approve', requireSuperAdmin, async (req, 
     }).eq('id', reg.id);
 
     await audit(req, { module: 'schools', action: 'approved', recordId: school.id, summary: `Approved application: ${school.school_name}` });
+    alertUsers(req, async (supabase, schoolId) => userIdsWithRoles(supabase, schoolId, ['school_admin']), {
+      scope: 'school', schoolId: school.id, category: 'account',
+      title: `${school.school_name} is approved`,
+      body: 'The platform team approved your application. Sign in to finish setting up the school.',
+      link: '/school-admin',
+    });
     res.json({ data: { school, activationLink }, message: 'School tenant provisioned; activation invitation sent.' });
   } catch (e) { next(e); }
 });
@@ -234,6 +241,12 @@ platformRouter.post('/schools', requireSuperAdmin, async (req, res, next) => {
       module: 'schools', action: 'created', recordId: school.id,
       summary: `Manual tenant: ${school.school_name} (administrator confirmation email ${confirmationEmail?.status || 'unknown'})`,
     });
+    alertUsers(req, async (supabase, schoolId) => userIdsWithRoles(supabase, schoolId, ['school_admin']), {
+      scope: 'school', schoolId: school.id, category: 'account',
+      title: `Welcome to E-MADAARIS, ${school.school_name}`,
+      body: 'Your school is live and its roles are ready. Add your classes, staff and learners to begin.',
+      link: '/school-admin',
+    });
     res.status(201).json({ data: { school, activationLink, temporaryAdminPassword, confirmationEmail } });
   } catch (e) { next(e); }
 });
@@ -274,6 +287,13 @@ platformRouter.patch('/schools/:id/status', requireSuperAdmin, async (req, res, 
       }).catch(() => {});
     }
     await audit(req, { module: 'schools', action: 'status_changed', recordId: data.id, summary: `${data.school_name} → ${status}`, metadata: { reason } });
+    alertUsers(req, async (supabase, schoolId) => userIdsWithRoles(supabase, schoolId, ['school_admin']), {
+      scope: 'school', schoolId: data.id, category: 'account',
+      title: `Subscription status: ${status.replace(/_/g, ' ')}`,
+      body: reason ? `${data.school_name} → ${status.replace(/_/g, ' ')}. ${reason}`
+        : `${data.school_name} is now ${status.replace(/_/g, ' ')}.`,
+      link: '/school/subscription',
+    });
     res.json({ data });
   } catch (e) { next(e); }
 });
@@ -817,5 +837,114 @@ platformRouter.get('/settings', async (req, res, next) => {
     const { data } = await requireDb().from('email_templates')
       .select('template_key, subject, body_html').order('template_key');
     res.json({ data: { templates: (data || []).filter((row) => !isSiteContentKey(row.template_key)) } });
+  } catch (e) { next(e); }
+});
+
+// ── Platform broadcast (Super Admin) ────────────────────────────
+/**
+ * One message to a single school, to a named role, or to every school on the platform. It is resolved
+ * one tenant at a time so every inbox row carries the school it belongs to and the tenant's own
+ * preference switches still apply — a platform broadcast is not a licence to ignore an opt-out.
+ */
+async function activeMemberIds(supabase, schoolId) {
+  const { data, error } = await supabase.from('school_users').select('id')
+    .eq('school_id', schoolId).eq('status', 'active').limit(3000);
+  if (error) return [];
+  return (data || []).map((row) => row.id);
+}
+
+platformRouter.get('/broadcast/roles', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const schoolId = z.string().uuid().optional().parse(req.query.school_id);
+    let query = requireDb().from('school_roles')
+      .select('name, schools!inner(status)')
+      .in('schools.status', ['active', 'trial']);
+    if (schoolId) query = query.eq('school_id', schoolId);
+    const { data, error } = await query.limit(5000);
+    if (error) throw new ApiError(500, error.message);
+    res.json({ data: [...new Set((data || []).map((row) => row.name))].sort() });
+  } catch (e) { next(e); }
+});
+
+platformRouter.post('/broadcast', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const body = z.object({
+      title: z.string().trim().min(3).max(200),
+      body: z.string().trim().max(2000).optional(),
+      link: z.string().trim().max(200).optional(),
+      target: z.enum(['all_schools', 'one_school', 'platform_team']).default('all_schools'),
+      school_id: z.string().uuid().optional(),
+      roles: z.array(z.string().trim().min(2).max(40)).max(10).default([]),
+      email_copy: z.coerce.boolean().default(false),
+    }).parse(req.body);
+    const supabase = requireDb();
+    const deliveries = [];
+
+    if (body.target === 'platform_team') {
+      const { data, error } = await supabase.from('platform_users').select('id').eq('status', 'active').limit(500);
+      if (error) throw new ApiError(500, error.message);
+      const summary = await notify(supabase, (data || []).map((row) => row.id), {
+        scope: 'platform', category: 'announcements', title: body.title,
+        body: body.body || null, link: body.link || '/notifications', email: false,
+      });
+      deliveries.push({ scope: 'platform', recipients: summary.inserted, error: summary.error || null, push: summary.push });
+    } else {
+      let schools;
+      if (body.target === 'one_school') {
+        const { data } = await supabase.from('schools').select('id, school_name').eq('id', body.school_id).maybeSingle();
+        if (!data) throw new ApiError(404, 'School not found');
+        schools = [data];
+      } else {
+        const { data, error } = await supabase.from('schools').select('id, school_name')
+          .in('status', ['active', 'trial']).limit(200);
+        if (error) throw new ApiError(500, error.message);
+        schools = data || [];
+      }
+      if (!schools.length) throw new ApiError(404, 'No school matches this broadcast');
+      // Five tenants at a time: a platform-wide post is a background job measured in remote round trips,
+      // and an unbounded fan-out would hold the request open for minutes.
+      for (let i = 0; i < schools.length; i += 5) {
+        const batch = await Promise.all(schools.slice(i, i + 5).map(async (school) => {
+          const ids = body.roles.length
+            ? await userIdsWithRoles(supabase, school.id, body.roles)
+            : await activeMemberIds(supabase, school.id);
+          const summary = await notify(supabase, ids, {
+            schoolId: school.id, scope: 'school', category: 'announcements',
+            title: body.title, body: body.body || null, link: body.link || '/notifications',
+            email: body.email_copy,
+          });
+          return {
+            school_id: school.id, school_name: school.school_name,
+            recipients: summary.inserted, error: summary.error || null, push: summary.push,
+          };
+        }));
+        deliveries.push(...batch);
+      }
+    }
+
+    const push = { attempted: 0, sent: 0, failed: 0, skipped: null };
+    for (const item of deliveries) {
+      const outcome = await item.push;
+      if (!outcome) continue;
+      push.attempted += outcome.attempted || 0;
+      push.sent += outcome.sent || 0;
+      push.failed += outcome.failed || 0;
+      if (outcome.skipped) push.skipped = outcome.skipped;
+    }
+    const delivered = deliveries.reduce((sum, item) => sum + (item.recipients || 0), 0);
+    const failures = deliveries.filter((item) => item.error);
+    await audit(req, {
+      module: 'notifications', action: 'broadcast',
+      summary: `Broadcast to ${body.target}${body.roles.length ? ` (${body.roles.join(', ')})` : ''}: `
+        + `${deliveries.length} audience(s), ${delivered} inbox rows`,
+      metadata: { title: body.title, target: body.target, school_id: body.school_id || null, roles: body.roles },
+    });
+    res.status(201).json({
+      data: {
+        target: body.target, audiences: deliveries.length, delivered, push,
+        sender_errors: failures.map((item) => ({ school: item.school_name || 'platform', error: item.error })),
+        detail: deliveries.map(({ push: _push, ...rest }) => rest),
+      },
+    });
   } catch (e) { next(e); }
 });

@@ -7,8 +7,21 @@ import { audit } from '../../services/audit.js';
 import { visibleStudentIds, isPortalOnly } from '../../services/scopes.js';
 import { assertSchoolRefs } from '../../services/tenantRefs.js';
 import { monthlyFeeSchemaReady } from '../../services/schemaSupport.js';
+import { notify, notifyLater, alertUsers, householdsByStudent } from '../../services/notify.js';
 
 export const financeRouter = Router();
+
+/**
+ * The accounts a money message about one learner should reach: the learner's own login and every
+ * guardian login on the record. Resolved after the response, because the payment is already booked.
+ */
+function alertHousehold(req, supabase, schoolId, studentIds, { title, body }) {
+  notifyLater('fee alert', async () => {
+    const households = await householdsByStudent(supabase, schoolId, studentIds);
+    const recipients = [...new Set([...households.values()].flat())];
+    return notify(supabase, recipients, { schoolId, category: 'finance', title, body });
+  }, req.log);
+}
 
 const money = z.coerce.number().min(0);
 const round = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -87,6 +100,11 @@ financeRouter.post('/assign-fees', requirePermission('finance.create'), async (r
       module: 'finance', action: 'fees_assigned', recordId: structure.id,
       summary: `${studentIds.length} students · ${structure.fee_categories?.name || ''}`,
       metadata: { students: studentIds.length, amount: structure.amount },
+    });
+    alertHousehold(req, supabase, schoolId, studentIds, {
+      title: `New fee due: ${structure.fee_categories?.name || 'School fee'}`,
+      body: `${round(structure.amount)} ${req.auth.school?.currency || 'SOS'}`
+        + (structure.due_date ? ` · payable by ${structure.due_date}` : ''),
     });
     res.status(201).json({ data: { assigned: studentIds.length, new_invoices: createdInvoices.length } });
   } catch (e) { next(e); }
@@ -187,6 +205,10 @@ financeRouter.post('/payments', requirePermission('finance.create'), async (req,
       module: 'finance', action: 'payment_recorded', recordId: payment.id,
       summary: `${transaction_reference} · ${round(body.amount)}`,
       metadata: { student_id: body.student_id, amount: body.amount, method: body.payment_method },
+    });
+    alertHousehold(req, supabase, schoolId, [body.student_id], {
+      title: `Payment received: ${round(body.amount)} ${payment.currency}`,
+      body: `Receipt ${receipt?.receipt_number || transaction_reference} · ${body.payment_method.replace('_', ' ')}.`,
     });
     res.status(201).json({ data: { payment, receipt } });
   } catch (e) { next(e); }
@@ -294,6 +316,10 @@ financeRouter.post('/payments/:id/reverse', requirePermission('finance.approve')
     await refreshExaminationClearances(supabase, payment.school_id, payment.student_id);
 
     await audit(req, { module: 'finance', action: 'payment_reversed', recordId: payment.id, summary: reason });
+    alertHousehold(req, supabase, payment.school_id, [payment.student_id], {
+      title: `Payment reversed: ${round(payment.amount)} ${payment.currency}`,
+      body: reason,
+    });
     res.json({ data: { ok: true } });
   } catch (e) { next(e); }
 });
@@ -602,6 +628,20 @@ financeRouter.post('/monthly/collect', requirePermission('finance.create'), asyn
         summary: `${recorded.length} learner${recorded.length === 1 ? '' : 's'} · ${body.month}`,
         metadata: { month: body.month, class_id: body.class_id, amount: round(recorded.reduce((t, r) => t + r.amount, 0)) },
       });
+      // One learner settled: name their receipt. A whole class settled: say only that the month is
+      // closed, because a message sent to every family must not carry another family's figures.
+      if (recorded.length === 1) {
+        const only = recorded[0];
+        alertHousehold(req, supabase, schoolId, [only.student_id], {
+          title: `Monthly fee received: ${body.month}`,
+          body: `Receipt ${only.receipt.receipt_number} · ${only.amount} ${currency}.`,
+        });
+      } else {
+        alertHousehold(req, supabase, schoolId, recorded.map((r) => r.student_id), {
+          title: `Monthly fees recorded: ${body.month}`,
+          body: `Your class's collection for ${body.month} was entered by ${req.auth.fullName || 'the finance desk'}.`,
+        });
+      }
     }
     res.status(201).json({
       data: {
@@ -629,6 +669,11 @@ financeRouter.post('/expenses/:id/review', requirePermission('finance.approve'),
       requested_by: data.requested_by, reviewed_by: req.auth.userId, reason,
     });
     await audit(req, { module: 'finance', action: `expense_${action}d`, recordId: data.id });
+    alertUsers(req, [data.requested_by].filter(Boolean), {
+      category: 'finance',
+      title: `Expense ${action === 'approve' ? 'approved' : 'rejected'}: ${data.title}`,
+      body: action === 'reject' ? reason : `${round(data.amount)} ${data.currency || 'SOS'} booked.`,
+    });
     res.json({ data });
   } catch (e) { next(e); }
 });

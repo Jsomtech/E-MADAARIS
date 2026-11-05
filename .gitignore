@@ -17,6 +17,15 @@ client/.env.*
 *.log
 server.err
 
+# Firebase server credentials — the sender reads the file path from .env, the file never belongs in git
+serviceAccount*.json
+*service-account*.json
+*firebase-admin*.json
+
+# Scratch probes
+server/tmp-*
+server/*.tmp.mjs
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

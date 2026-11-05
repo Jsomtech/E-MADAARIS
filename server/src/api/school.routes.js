@@ -17,6 +17,7 @@ import { clearSchoolData } from '../services/schoolData.js';
 import { reclaimIdentity, temporaryPassword } from '../services/authIdentity.js';
 import { listTeacherStaff } from '../services/staffRoles.js';
 import { sendAccountConfirmation } from '../services/accountEmails.js';
+import { alertUsers } from '../services/notify.js';
 import { env } from '../config/env.js';
 
 export const schoolRouter = Router();
@@ -702,6 +703,13 @@ schoolRouter.post('/users', requirePermission('users.create'), async (req, res, 
       module: 'users', action: 'created', recordId: su.id,
       summary: `${body.email} as ${body.role} (password set by admin, confirmation email ${confirmationEmail.status})`,
     });
+    // The inbox entry is what the new colleague finds on their very first sign-in.
+    alertUsers(req, [su.id], {
+      category: 'account',
+      title: `Welcome to ${req.auth.school.school_name}`,
+      body: `Your ${body.role} account is ready. Sign in and change your password when prompted.`,
+      link: '/account',
+    });
     res.status(201).json({ data: { user: su, confirmationEmail } });
   } catch (e) { next(e); }
 });
@@ -736,6 +744,13 @@ schoolRouter.post('/users/:id/reset-password', requirePermission('users.edit'), 
     await audit(req, {
       module: 'users', action: 'password_reset', recordId: su.id,
       summary: body.generate ? `${su.email} (temporary password generated)` : su.email,
+    });
+    alertUsers(req, [su.id], {
+      category: 'account',
+      title: 'Your password was reset',
+      body: `${req.auth.fullName || 'A school administrator'} reset your sign-in password. `
+        + 'The new password was given to you directly; change it at your next sign-in.',
+      link: '/account',
     });
     res.json({ data: { ok: true, ...(body.generate ? { temporaryPassword: password } : {}) } });
   } catch (e) { next(e); }

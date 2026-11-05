@@ -6,6 +6,7 @@ import { ApiError } from '../../middleware/error.js';
 import { requirePermission, requirePlatform } from '../../middleware/rbac.js';
 import { audit } from '../../services/audit.js';
 import { visibleStudentIds } from '../../services/scopes.js';
+import { alertUsers, userIdsWithRoles, NOTIFICATION_CATEGORIES } from '../../services/notify.js';
 
 /**
  * Remaining school-facing flows: notifications, support tickets, certificates,
@@ -56,6 +57,54 @@ notificationsRouter.post('/:id/read', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+/**
+ * Per-user category choices. A platform identity has no school membership, so it has no preferences
+ * row to write — the school inbox is the only place these toggles mean anything.
+ */
+notificationsRouter.get('/preferences', async (req, res, next) => {
+  try {
+    if (req.auth.type !== 'school') return res.json({ data: [] });
+    const { data, error } = await requireDb().from('notification_preferences')
+      .select('category, in_app, email')
+      .eq('school_id', req.auth.schoolId).eq('school_user_id', req.auth.userId).limit(100);
+    if (error) throw new ApiError(500, error.message);
+    const saved = new Map((data || []).map((row) => [row.category, row]));
+    res.json({
+      data: NOTIFICATION_CATEGORIES.map((category) => ({
+        category,
+        in_app: saved.get(category)?.in_app ?? true,
+        email: saved.get(category)?.email ?? false,
+      })),
+    });
+  } catch (e) { next(e); }
+});
+
+notificationsRouter.put('/preferences', async (req, res, next) => {
+  try {
+    if (req.auth.type !== 'school') throw new ApiError(400, 'Notification preferences belong to a school account');
+    const body = z.object({
+      category: z.enum(NOTIFICATION_CATEGORIES),
+      in_app: z.coerce.boolean().default(true),
+      email: z.coerce.boolean().default(false),
+    }).parse(req.body);
+    const { data, error } = await requireDb().from('notification_preferences')
+      .upsert({
+        school_id: req.auth.schoolId, school_user_id: req.auth.userId,
+        category: body.category, in_app: body.in_app, email: body.email,
+      }, { onConflict: 'school_user_id,category' }).select().maybeSingle();
+    if (error) throw new ApiError(500, error.message);
+    res.json({ data });
+  } catch (e) { next(e); }
+});
+
+function statusLabel(status) {
+  return String(status || '').replace(/_/g, ' ');
+}
+
+function preview(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+}
+
 // ---------- Support tickets ----------
 export const supportRouter = Router();
 
@@ -82,6 +131,15 @@ supportRouter.post('/tickets', requirePermission('support.create'), async (req, 
     }).select().single();
     if (error) throw new ApiError(500, error.message);
     await audit(req, { module: 'support', action: 'created', recordId: data.id, summary: body.subject });
+    alertUsers(req, async (supabase, schoolId) => {
+      const ids = await userIdsWithRoles(supabase, schoolId, ['school_admin']);
+      return ids.filter((id) => id !== req.auth.userId);
+    }, {
+      category: 'support',
+      title: `Support ticket opened: ${body.subject}`,
+      body: `${req.auth.fullName || 'A colleague'} raised a ${body.priority} priority ${body.category} ticket.`,
+      link: '/school/support',
+    });
     res.status(201).json({ data });
   } catch (e) { next(e); }
 });
@@ -104,7 +162,7 @@ supportRouter.post('/tickets/:id/replies', requirePermission('support.create'), 
   try {
     const { reply_body } = z.object({ reply_body: z.string().trim().min(1).max(4000) }).parse(req.body);
     const supabase = requireDb();
-    const { data: ticket } = await supabase.from('support_tickets').select('id, status')
+    const { data: ticket } = await supabase.from('support_tickets').select('id, status, subject, assigned_to')
       .eq('id', req.params.id).eq('school_id', req.auth.schoolId).maybeSingle();
     if (!ticket) throw new ApiError(404, 'Ticket not found');
     const { data, error } = await supabase.from('support_replies').insert({
@@ -113,6 +171,14 @@ supportRouter.post('/tickets/:id/replies', requirePermission('support.create'), 
     if (error) throw new ApiError(500, error.message);
     if (ticket.status === 'resolved' || ticket.status === 'closed') {
       await supabase.from('support_tickets').update({ status: 'open' }).eq('id', ticket.id);
+    }
+    if (ticket.assigned_to) {
+      alertUsers(req, [ticket.assigned_to], {
+        scope: 'platform', category: 'support',
+        title: `School replied: ${ticket.subject}`,
+        body: `${req.auth.school?.school_name || 'A school'} answered your support ticket.`,
+        link: '/platform-support',
+      });
     }
     res.status(201).json({ data });
   } catch (e) { next(e); }
@@ -141,6 +207,9 @@ platformSupportRouter.post('/tickets/:id/replies', requirePlatform(), async (req
       status: z.enum(['open', 'in_progress', 'waiting_for_school', 'resolved', 'closed']).optional(),
     }).parse(req.body);
     const supabase = requireDb();
+    const { data: ticket } = await supabase.from('support_tickets')
+      .select('id, subject, school_id, created_by_school_user').eq('id', req.params.id).maybeSingle();
+    if (!ticket) throw new ApiError(404, 'Ticket not found');
     const { data: reply, error } = await supabase.from('support_replies').insert({
       ticket_id: req.params.id, reply_body: body.reply_body,
       is_internal_note: body.is_internal_note, author_platform_user: req.auth.userId,
@@ -149,6 +218,16 @@ platformSupportRouter.post('/tickets/:id/replies', requirePlatform(), async (req
     if (body.status) {
       await supabase.from('support_tickets').update({ status: body.status, assigned_to: req.auth.userId })
         .eq('id', req.params.id);
+    }
+    if (!body.is_internal_note) {
+      alertUsers(req, [ticket.created_by_school_user], {
+        scope: 'school', schoolId: ticket.school_id, category: 'support',
+        title: `Support update: ${ticket.subject}`,
+        body: body.status && body.status !== 'open'
+          ? `Your ticket is now ${statusLabel(body.status)}. ${preview(body.reply_body)}`
+          : preview(body.reply_body),
+        link: '/school/support',
+      });
     }
     await audit(req, { module: 'support', action: 'replied', recordId: req.params.id });
     res.status(201).json({ data: reply });
@@ -165,6 +244,14 @@ platformSupportRouter.patch('/tickets/:id', requirePlatform(), async (req, res, 
     const { data, error } = await requireDb().from('support_tickets').update(body).eq('id', req.params.id).select().maybeSingle();
     if (error) throw new ApiError(500, error.message);
     if (!data) throw new ApiError(404, 'Ticket not found');
+    if (body.status) {
+      alertUsers(req, [data.created_by_school_user], {
+        scope: 'school', schoolId: data.school_id, category: 'support',
+        title: `Support ticket ${statusLabel(body.status)}`,
+        body: `${data.subject} is now ${statusLabel(body.status)}.`,
+        link: '/school/support',
+      });
+    }
     res.json({ data });
   } catch (e) { next(e); }
 });

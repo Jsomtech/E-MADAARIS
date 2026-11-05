@@ -29,6 +29,7 @@ import { assertSchoolRefs } from '../services/tenantRefs.js';
  *   limit: 'max_students'              // usage cap table-count on create (counts `countTable || table`)
  *   countTable,
  *   beforeCreate(payload, req), beforeUpdate(payload, req), afterCreate(row, req),
+ *   afterUpdate(row, req), afterDelete(row, req),   // row is the committed record
  *   softDelete: true|false,            // sets status='deleted' when softDeleteColumn given
  *   softDeleteColumn='archived',
  *   readonly: true,
@@ -165,6 +166,7 @@ export function resourceRouter(def) {
         const { data, error } = await q.select().maybeSingle();
         if (error) throw new ApiError(500, translatePgError(error));
         if (!data) throw new ApiError(404, `${def.table} not found`);
+        if (def.afterUpdate) await def.afterUpdate(data, req);
         await audit(req, { module: def.auditModule || def.perm, action: 'updated', recordId: data.id });
         res.json({ data });
       } catch (e) { next(e); }
