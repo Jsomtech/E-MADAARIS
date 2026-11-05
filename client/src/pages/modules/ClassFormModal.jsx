@@ -136,6 +136,9 @@ export default function ClassFormModal({ open, onClose, initial, teachers = [], 
           <Field field={{
             name: 'class_teacher', type: 'select', col: 6, label: t('sections.assignedTeacher', { defaultValue: 'Assigned teacher' }),
             options: teacherOptions, placeholder: t('sections.pickTeacher', { defaultValue: 'No teacher assigned' }),
+            help: teacherOptions.length ? undefined : t('sections.noTeachersYet', {
+              defaultValue: 'Nobody holds the Teacher role yet. Create one under Users → Staff, or give an existing member the Teacher role.',
+            }),
           }} value={form.teacher_id} onChange={set('teacher_id')} />
         )}
         {canRoom && (
@@ -217,7 +220,7 @@ export default function ClassFormModal({ open, onClose, initial, teachers = [], 
       </div>
 
       <div className="d-flex flex-wrap gap-3 mt-3 small text-muted">
-        <span className="d-inline-flex align-items-center gap-1"><GraduationCap size={14} /> {t('sections.teacherFromStaff', { defaultValue: 'Teachers come from your staff list.' })}</span>
+        <span className="d-inline-flex align-items-center gap-1"><GraduationCap size={14} /> {t('sections.teacherFromStaff', { defaultValue: 'Only staff with the Teacher role can be assigned.' })}</span>
         <span className="d-inline-flex align-items-center gap-1"><DoorOpen size={14} /> {t('sections.roomOptional', { defaultValue: 'The room is optional.' })}</span>
       </div>
     </Modal>

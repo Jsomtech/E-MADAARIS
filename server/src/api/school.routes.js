@@ -15,6 +15,7 @@ import { credentialFlags, getIssuedCredential, setIssuedCredential } from '../se
 import { createBackup, listBackups, getBackupPayload } from '../services/backups.js';
 import { clearSchoolData } from '../services/schoolData.js';
 import { reclaimIdentity, temporaryPassword } from '../services/authIdentity.js';
+import { listTeacherStaff } from '../services/staffRoles.js';
 import { env } from '../config/env.js';
 
 export const schoolRouter = Router();
@@ -436,13 +437,19 @@ schoolRouter.get('/me/teaching', requirePermission('attendance.view', 'timetable
 // ── School users ────────────────────────────────────────────────
 const PERSONAL_ROLE_NAMES = ['parent', 'student'];
 
-/** Ids of every account holding at least one non-portal role — the staff directory's universe. */
-async function staffUserIds(schoolId) {
+/**
+ * Ids of every account holding at least one non-portal role — the staff directory's universe.
+ * `roleNames` narrows it to the roles a picker actually wants, so a duty roster can ask for
+ * invigilators without offering the whole office.
+ */
+async function staffUserIds(schoolId, roleNames = []) {
   const supabase = requireDb();
   const { data: roles, error } = await supabase.from('school_roles')
     .select('id, name').eq('school_id', schoolId);
   if (error) throw new ApiError(500, error.message);
-  const staffRoleIds = (roles || []).filter((r) => !PERSONAL_ROLE_NAMES.includes(r.name)).map((r) => r.id);
+  let picked = (roles || []).filter((r) => !PERSONAL_ROLE_NAMES.includes(r.name));
+  if (roleNames.length) picked = picked.filter((r) => roleNames.includes(r.name));
+  const staffRoleIds = picked.map((r) => r.id);
   if (!staffRoleIds.length) return [];
   const { data: links, error: linkError } = await supabase.from('school_user_roles').select('user_id')
     .eq('school_id', schoolId).in('role_id', staffRoleIds);
@@ -455,7 +462,8 @@ schoolRouter.get('/users', requirePermission('users.view'), async (req, res, nex
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
     const pageSize = Math.min(200, Number(req.query.pageSize) || 50);
-    const staffIds = await staffUserIds(req.auth.schoolId);
+    const roleNames = String(req.query.role || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const staffIds = await staffUserIds(req.auth.schoolId, roleNames);
     if (!staffIds.length) return res.json({ data: [], total: 0, page, pageSize });
     let q = requireDb().from('school_users').select('*', { count: 'exact' })
       .eq('school_id', req.auth.schoolId).in('id', staffIds);
@@ -490,20 +498,7 @@ schoolRouter.get('/teachers', requirePermission(
   'timetable.view', 'timetable.manage', 'teachers.view', 'teachers.manage', 'school.edit', 'users.view',
 ), async (req, res, next) => {
   try {
-    const { data, error } = await requireDb().from('school_users')
-      .select('id, full_name, email, avatar_url, school_user_roles(school_roles(name))')
-      .eq('school_id', req.auth.schoolId).eq('status', 'active').order('full_name').limit(500);
-    if (error) throw new ApiError(500, error.message);
-    const teachers = (data || [])
-      .map((u) => ({
-        id: u.id,
-        full_name: u.full_name,
-        email: u.email,
-        avatar_url: u.avatar_url,
-        roles: (u.school_user_roles || []).map((r) => r.school_roles?.name).filter(Boolean),
-      }))
-      .filter((u) => u.roles.some((role) => /teacher/i.test(role)));
-    res.json({ data: teachers });
+    res.json({ data: await listTeacherStaff(req.auth.schoolId) });
   } catch (e) { next(e); }
 });
 

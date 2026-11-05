@@ -7,6 +7,7 @@ import { audit } from '../../services/audit.js';
 import { recordDeletion } from '../../services/trash.js';
 import { checkEntitlement } from '../../services/entitlement.js';
 import { classesExtraColumns } from '../../services/schemaSupport.js';
+import { holdsTeacherRole, listTeacherStaff } from '../../services/staffRoles.js';
 import { sanitizeSearch } from '../../core/crud.js';
 
 /**
@@ -41,11 +42,19 @@ async function loadClass(schoolId, id) {
   return data;
 }
 
+/**
+ * Homeroom teacher = someone who teaches. A principal, registrar or administrator may hold the
+ * class card but is not a teaching assignment, so the picker and the write path both require the
+ * teacher role; otherwise the school ends up with a class nobody teaches.
+ */
 async function assertTeacher(schoolId, teacherId) {
   if (!teacherId) return null;
   const { data } = await requireDb().from('school_users').select('id, full_name')
     .eq('id', teacherId).eq('school_id', schoolId).maybeSingle();
   if (!data) throw new ApiError(400, 'That teacher is not part of this school.');
+  if (!await holdsTeacherRole(schoolId, teacherId)) {
+    throw new ApiError(400, `${data.full_name} does not hold the Teacher role. Grant it in Users, or pick someone who teaches.`);
+  }
   return data;
 }
 
@@ -92,18 +101,11 @@ async function homeroomTeachers(schoolId, classIds) {
 
 /** Keep the teacher list usable even for registrars who cannot open /school/users. */
 async function teacherDirectory(schoolId) {
-  const { data, error } = await requireDb().from('school_users')
-    .select('id, full_name, email, school_user_roles(school_roles(name))')
-    .eq('school_id', schoolId).eq('status', 'active').order('full_name').limit(500);
-  if (error) return [];
-  return (data || [])
-    .map((u) => ({
-      id: u.id,
-      full_name: u.full_name,
-      email: u.email,
-      roles: (u.school_user_roles || []).map((r) => r.school_roles?.name).filter(Boolean),
-    }))
-    .filter((u) => !u.roles.length || u.roles.some((r) => /teacher|principal|head/i.test(r)));
+  try {
+    return await listTeacherStaff(schoolId);
+  } catch {
+    return [];
+  }
 }
 
 /** Attendance taken in the last 180 days, as a percentage per student. Late still counts as present. */

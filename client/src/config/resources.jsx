@@ -168,7 +168,7 @@ export const RESOURCES = {
   'examination-invigilators': {
     api: '/examination-invigilators', perm: 'examinations',
     columns: [C('schedule_id', { label: 'Schedule' }), C('school_user_id', { label: 'Invigilator' })],
-    fields: [F('schedule_id', 'text', { required: true }), rel('school_user_id', '/school/users', 'full_name', { required: true })],
+    fields: [F('schedule_id', 'text', { required: true }), rel('school_user_id', '/school/users?role=invigilator,teacher', 'full_name', { required: true })],
   },
   'grade-scales': {
     api: '/grade-scales', perm: 'examinations', search: 'name',
