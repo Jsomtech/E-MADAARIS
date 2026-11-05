@@ -89,13 +89,21 @@ export async function api(method, path, body, params, timeout) {
     return res.data;
   } catch (error) {
     const payload = error.response?.data;
-    const message = payload?.error || error.message || 'Network error';
-    const err = new Error(message);
-    err.status = error.response?.status;
+    const status = error.response?.status;
+    // A request that stopped answering is not a request that failed, and neither is a 5xx that
+    // never carried our { error } envelope — that one comes from the proxy or a restarted process,
+    // after the server may already have done the work.
+    const unconfirmed = !error.response
+      ? /timeout of \d+ms exceeded|ECONNABORTED/i.test(`${error.code || ''} ${error.message || ''}`)
+      : status >= 500 && typeof payload?.error !== 'string';
+    const err = new Error(payload?.error
+      || (unconfirmed
+        ? 'The server did not confirm this request — it may still have completed. Reload and check before you run it again.'
+        : null)
+      || error.message || 'Network error');
+    err.status = status;
     err.details = payload?.details;
-    // A request that stopped answering is not a request that failed: the server carries on.
-    // Callers that wiped or restored data use this to warn before anyone clicks twice.
-    err.timedOut = !error.response && /timeout of \d+ms exceeded|ECONNABORTED/i.test(`${error.code || ''} ${error.message || ''}`);
+    err.unconfirmed = unconfirmed;
     throw err;
   }
 }
@@ -119,7 +127,7 @@ export const apiSweep = (p, body) => api('post', p, body, undefined, SWEEP_TIMEO
  * A sweep that ran past SWEEP_TIMEOUT is not a sweep that failed — the server is still walking the
  * tables. Saying so keeps nobody from reading a slow wipe or restore as a crash and running it twice.
  */
-export const sweepFailure = (error) => (error.timedOut
+export const sweepFailure = (error) => (error.unconfirmed
   ? i18n.t('sections.sweepTimedOut', {
     defaultValue: 'The server is still working on this — the change may already be applied. Refresh and check the recycle bin before you run it again.',
   })
