@@ -19,7 +19,7 @@ import { ChartCard, DoughnutView } from '../../components/ui/Charts.jsx';
  */
 export default function SchoolAdminDashboard() {
   const { t } = useTranslation();
-  const { profile, logout } = useAuth();
+  const { profile } = useAuth();
   const { data, loading, error, reload } = useApi('/school/dashboard');
   const [dangerOpen, setDangerOpen] = useState(false);
   const [confirmName, setConfirmName] = useState('');
@@ -32,15 +32,8 @@ export default function SchoolAdminDashboard() {
       const result = await apiSweep('/school/data/clear', { confirm: confirmName });
       setDangerOpen(false);
       setConfirmName('');
-      if (result.data?.selfRemoved) {
-        toast.success(t('sections.dataClearedSignedOut', {
-          defaultValue: 'The school is now empty — all data and user accounts were deleted. Ask the Super Admin to restore from the platform recycle bin.',
-        }));
-        await logout();
-        return;
-      }
       toast.success(t('sections.dataClearedRecoverable', {
-        defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} accounts). It stays restorable in the recycle bin.',
+        defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} logins removed). Your administrator login stays, and everything is restorable from the recycle bin.',
         tables: result.data?.tables ?? 0, rows: result.data?.rows ?? 0, users: result.data?.users ?? 0,
       }));
       reload();
@@ -239,7 +232,7 @@ export default function SchoolAdminDashboard() {
         )}
       >
         <p className="small text-muted">
-          {t('sections.clearDataHint', { defaultValue: 'Deletes every student, class, exam, fee, attendance, learning and operations record, and every staff, student and parent login account. Only the school profile, branding, roles and subscription stay. Everything is snapshotted into the recycle bin first, so the Super Admin can restore it — you will be signed out.' })}
+          {t('sections.clearDataHint', { defaultValue: 'Deletes every student, class, exam, fee, attendance, learning and operations record, and every staff, student and parent login account. Your own administrator login, the school profile, branding, roles and subscription stay, so you can sign in and start over. Everything is snapshotted into the recycle bin first, so the Super Admin can restore it.' })}
         </p>
         <label className="form-label small fw-semibold" htmlFor="danger-confirm">
           {t('sections.typeSchoolName', { defaultValue: 'Type “{{name}}” to confirm', name: schoolName })}

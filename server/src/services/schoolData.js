@@ -6,8 +6,9 @@ import { CLEAR_TABLES, PARENT_SCOPED_TABLES } from './schoolTables.js';
 
 /**
  * Business data wiped by the danger-zone "clear data" action.
- * Accounts, roles, subscription and school profile are deliberately kept so the
- * administrator can still sign in and start over.
+ * Every staff, teacher, student and parent login goes with the business rows, but the school's own
+ * administrators — and whoever pressed the button — are kept, so the tenant is still signable into
+ * the moment the sweep ends. Roles, subscription and the school profile always stayed.
  *
  * Clearing is reversible: every row is snapshotted into audit_logs as one bulk trash
  * entry before anything is deleted, so the recycle bin can put the school back.
@@ -80,9 +81,16 @@ export async function readSchoolRows(table, schoolId) {
   return readAllRows(table, schoolId);
 }
 
-/** Delete this school's rows in one table, keeping the 42P01 answer the callers skip on. */
-export async function deleteSchoolRows(table, schoolId) {
-  if (!PARENT_SCOPED_TABLES[table]) return db().from(table).delete().eq('school_id', schoolId);
+/**
+ * Delete this school's rows in one table, keeping the 42P01 answer the callers skip on.
+ * `except` spares a named set of rows — the administrator logins a clear must leave behind.
+ */
+export async function deleteSchoolRows(table, schoolId, { except = null } = {}) {
+  const list = except?.ids?.length ? except.ids.map((id) => `"${id}"`).join(',') : null;
+  if (!PARENT_SCOPED_TABLES[table]) {
+    const query = db().from(table).delete().eq('school_id', schoolId);
+    return list ? query.not(except.column, 'in', `(${list})`) : query;
+  }
   const scope = PARENT_SCOPED_TABLES[table];
   const { ids, error } = await parentIds(table, schoolId);
   if (error) return { error };
@@ -92,6 +100,24 @@ export async function deleteSchoolRows(table, schoolId) {
     if (deleteError) return { error: deleteError };
   }
   return { error: null };
+}
+
+/**
+ * The account tables and the column that ties each row to a login. A clear deletes through these
+ * two columns so that the school's own administrators survive it and can sign in right after.
+ */
+const ACCOUNT_TABLES = { school_users: 'id', school_user_roles: 'user_id' };
+const ADMINISTRATOR_ROLE = 'school_admin';
+
+/** Ids of the logins that survive a clear: the school's administrators, plus whoever pressed the button. */
+async function administratorIds(schoolId, actor) {
+  const { data, error } = await db().from('school_user_roles')
+    .select('user_id, school_roles!inner(name)').eq('school_id', schoolId)
+    .eq('school_roles.name', ADMINISTRATOR_ROLE).limit(10000);
+  if (error) return { error };
+  const ids = new Set((data || []).map((row) => row.user_id));
+  if (actor.scope === 'school' && actor.userId) ids.add(actor.userId);
+  return { ids };
 }
 
 async function recordBulkSnapshot(schoolId, bulk, rowCount, actor = {}, { label, table = '__all__', module = 'school' } = {}) {
@@ -157,9 +183,11 @@ export async function clearSchoolData(schoolId, { actor = {}, snapshot = true } 
     })
     : null;
 
-  // The acting administrator's own login is part of the wipe; the client signs them out.
-  const selfRemoved = Boolean(actor.scope === 'school' && actor.userId
-    && bulk.school_users?.some((row) => row.id === actor.userId));
+  // The school's own administrators are deliberately left in place, so somebody can sign in the
+  // moment the sweep ends. Their auth accounts and passwords were never touched by this service.
+  const keep = await administratorIds(schoolId, actor);
+  if (keep.error) throw new ApiError(500, `Could not find the school's administrators: ${keep.error.message}`);
+  const keepIds = [...keep.ids];
 
   let cleared = 0;
   const failures = [];
@@ -169,7 +197,9 @@ export async function clearSchoolData(schoolId, { actor = {}, snapshot = true } 
     ? CLEAR_TABLES.filter((table) => bulk[table]?.length)
     : CLEAR_TABLES;
   for (const table of targets) {
-    const { error } = await deleteSchoolRows(table, schoolId);
+    const column = ACCOUNT_TABLES[table];
+    const { error } = await deleteSchoolRows(table, schoolId,
+      column && keepIds.length ? { except: { column, ids: keepIds } } : {});
     if (error && error.code !== '42P01') {
       failures.push(`${table}: ${error.message}`);
       continue;
@@ -179,7 +209,14 @@ export async function clearSchoolData(schoolId, { actor = {}, snapshot = true } 
   if (failures.length) {
     throw new ApiError(500, `Some tables could not be cleared — ${failures.slice(0, 3).join('; ')}`);
   }
-  return { tables: cleared, rows: rowCount, snapshotId, users: bulk.school_users?.length || 0, selfRemoved };
+  const keptLogins = (bulk.school_users || []).filter((row) => keep.ids.has(row.id)).length;
+  return {
+    tables: cleared,
+    rows: rowCount,
+    snapshotId,
+    users: (bulk.school_users?.length || 0) - keptLogins,
+    keptLogins,
+  };
 }
 
 /**

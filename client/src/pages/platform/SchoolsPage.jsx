@@ -650,7 +650,7 @@ function ClearDataModal({ row, onClose, onSaved }) {
     try {
       const { data } = await apiSweep(`/platform/schools/${row.id}/clear-data`, { confirm: confirmName });
       toast.success(t('sections.dataClearedRecoverable', {
-        defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} accounts). It stays restorable in the recycle bin.',
+        defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} logins removed). The school administrators stay signed in, and everything is restorable from the recycle bin.',
         tables: data?.tables ?? 0, rows: data?.rows ?? 0, users: data?.users ?? 0,
       }));
       onSaved();
@@ -675,7 +675,7 @@ function ClearDataModal({ row, onClose, onSaved }) {
       )}>
       <p className="small text-muted">
         {t('sections.platformClearRowHint', {
-          defaultValue: 'Deletes every student, staff and parent login and every business record for this school. Only the school profile, branding, roles and subscription stay. Everything is snapshotted into the recycle bin first, so it can be restored from Platform → Recycle bin.',
+          defaultValue: 'Deletes every student, teacher and parent login and every business record for this school. The school’s own administrator logins, its profile, branding, roles and subscription stay, so the school can still be signed into. Everything is snapshotted into the recycle bin first, so it can be restored from Platform → Recycle bin.',
         })}
       </p>
       <label className="form-label small fw-semibold" htmlFor="platform-clear-confirm">

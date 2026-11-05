@@ -88,7 +88,7 @@ export default function BackupsPage() {
     try {
       const res = await apiSweep(`/platform/schools/${selected.id}/clear-data`, { confirm: confirmName });
       toast.success(t('sections.dataClearedRecoverable', {
-        defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} accounts). It stays restorable in the recycle bin.',
+        defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} logins removed). The school administrators stay signed in, and everything is restorable from the recycle bin.',
         tables: res.data?.tables ?? 0, rows: res.data?.rows ?? 0, users: res.data?.users ?? 0,
       }));
       setConfirmName('');

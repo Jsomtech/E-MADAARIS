@@ -1,9 +1,10 @@
 /**
  * Tables wiped by the danger-zone "clear data" action, ordered children → parents so the
- * deletes never hit a foreign key. Everything the school owns is removed — including every
- * staff/student/parent login — while the school row, roles, branding, subscription and the
- * recycle-bin audit trail stay so the tenant can still be signed into and restored.
- * RESTORE_ORDER is the reverse: parents must exist before their children are re-inserted.
+ * deletes never hit a foreign key. Everything the school owns is removed — every
+ * staff/student/parent login included — while the school row, roles, branding, subscription and
+ * the recycle-bin audit trail stay, and clearSchoolData spares the administrators' own accounts so
+ * the tenant can still be signed into. RESTORE_ORDER is the reverse: parents must exist before
+ * their children are re-inserted.
  */
 export const CLEAR_TABLES = [
   // finance

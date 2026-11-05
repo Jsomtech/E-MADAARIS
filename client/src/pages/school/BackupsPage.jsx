@@ -17,7 +17,7 @@ const kb = (bytes) => {
 /** School backup console: run manual snapshots, download stored JSON, and the danger zone. */
 export default function BackupsPage() {
   const { t } = useTranslation();
-  const { profile, logout } = useAuth();
+  const { profile } = useAuth();
   const schoolName = profile?.school?.school_name || '';
   const [body, setBody] = useState(null);
   const [page, setPage] = useState(1);
@@ -58,15 +58,8 @@ export default function BackupsPage() {
     try {
       const result = await apiSweep('/school/data/clear', { confirm: confirmName });
       setConfirmName('');
-      if (result.data?.selfRemoved) {
-        toast.success(t('sections.dataClearedSignedOut', {
-          defaultValue: 'The school is now empty — all data and user accounts were deleted. Ask the Super Admin to restore from the platform recycle bin.',
-        }));
-        await logout();
-        return;
-      }
       toast.success(t('sections.dataClearedRecoverable', {
-        defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} accounts). It stays restorable in the recycle bin.',
+        defaultValue: 'School cleared ({{tables}} tables, {{rows}} rows, {{users}} logins removed). Your administrator login stays, and everything is restorable from the recycle bin.',
         tables: result.data?.tables ?? 0, rows: result.data?.rows ?? 0, users: result.data?.users ?? 0,
       }));
       setPage(1);
@@ -166,7 +159,7 @@ export default function BackupsPage() {
           <ShieldAlert size={17} /> {t('sections.dangerZone', { defaultValue: 'Danger zone' })}
         </div>
         <p className="small text-muted mb-2 mt-1">
-          {t('sections.clearDataHint', { defaultValue: 'Deletes every student, class, exam, fee, attendance, learning and operations record, and every staff, student and parent login account. Only the school profile, branding, roles and subscription stay. Everything is snapshotted into the recycle bin first; you will be signed out and the Super Admin can restore it.' })}
+          {t('sections.clearDataHint', { defaultValue: 'Deletes every student, class, exam, fee, attendance, learning and operations record, and every staff, student and parent login account. Your own administrator login, the school profile, branding, roles and subscription stay. Everything is snapshotted into the recycle bin first, and the Super Admin can restore it.' })}
         </p>
         <div className="row g-2 align-items-end">
           <div className="col-12 col-md-5">
