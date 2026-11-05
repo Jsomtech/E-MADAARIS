@@ -19,6 +19,13 @@ export const env = {
   credentialsKey: process.env.CREDENTIALS_KEY || '',
   emailProvider: process.env.EMAIL_PROVIDER || '',
   emailFrom: process.env.EMAIL_FROM || 'no-reply@e-madaaris.com',
+  // Seconds. A confirmation link is a credential-bearing URL, so the window is clamped to
+  // 15 minutes .. 30 days however it is configured; unset means seven days.
+  emailVerificationExpiryMs: (() => {
+    const raw = Number(process.env.EMAIL_VERIFICATION_EXPIRY || 0) * 1000;
+    if (!Number.isFinite(raw) || raw <= 0) return 7 * 86400000;
+    return Math.min(Math.max(raw, 15 * 60000), 30 * 86400000);
+  })(),
   paymentProvider: process.env.PAYMENT_PROVIDER || '',
   appBaseUrl: process.env.APP_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:5173',
   backupIntervalMs: Number(process.env.BACKUP_INTERVAL_MS || 10000),

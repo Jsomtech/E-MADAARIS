@@ -12,8 +12,6 @@ import { sendMail } from './mailer.js';
  * migration, and a token cannot name a membership from another school. Without CREDENTIALS_KEY the
  * mail still goes out, just without the button.
  */
-const TOKEN_DAYS = 7;
-
 function signingKey() {
   if (!env.credentialsKey) return null;
   return createHmac('sha256', env.credentialsKey).update('email-confirmation').digest();
@@ -22,7 +20,7 @@ function signingKey() {
 export function buildConfirmToken(membershipId, schoolId) {
   const key = signingKey();
   if (!key) return null;
-  const expiresAt = new Date(Date.now() + TOKEN_DAYS * 86400000).toISOString();
+  const expiresAt = new Date(Date.now() + env.emailVerificationExpiryMs).toISOString();
   const payload = Buffer.from(`${membershipId}:${schoolId}:${expiresAt}`).toString('base64url');
   const signature = createHmac('sha256', key).update(payload).digest('hex');
   return { token: `${payload}.${signature}`, expiresAt };
