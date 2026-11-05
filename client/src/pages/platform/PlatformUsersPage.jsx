@@ -1,13 +1,15 @@
-// Platform staff (platform_users): list, email invitations, enable/disable — with a self-protection guard.
+// Platform staff (platform_users): list, invitations or ready-to-sign-in accounts, enable/disable, and
+// the helpdesk password actions. Credential reads are Super Admin only and every one is audited server-side.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
-import { Ban, CheckCircle2, RefreshCw, ShieldAlert, UserPlus, Users as UsersIcon } from 'lucide-react';
+import { Ban, CheckCircle2, Eye, RefreshCw, ShieldAlert, UserPlus, Users as UsersIcon } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { apiPatch, apiPost } from '../../api/client.js';
 import DataTable from '../../components/ui/DataTable.jsx';
 import Field from '../../components/ui/Field.jsx';
 import { Modal, ConfirmDialog } from '../../components/ui/Modal.jsx';
+import CredentialModal from '../../components/CredentialModal.jsx';
 import { Badge, EmptyState, PageHeader, dateTime } from '../../components/ui/Basics.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 
@@ -23,6 +25,7 @@ export default function PlatformUsersPage() {
   const { profile } = useAuth();
   const [inviting, setInviting] = useState(false);
   const [pending, setPending] = useState(null); // { user, status }
+  const [credentialFor, setCredentialFor] = useState(null);
   const [busy, setBusy] = useState(false);
 
   const list = useApi('/platform/users');
@@ -73,20 +76,31 @@ export default function PlatformUsersPage() {
     {
       key: 'actions',
       label: t('common.actions'),
-      width: 150,
+      width: 210,
       className: 'text-end',
       render: (row) => {
         const self = row.id === profile?.userId;
         const next = row.status === 'active' ? 'inactive' : 'active';
-        if (self) {
-          return <span className="small text-muted">{t('platform.selfGuard', { defaultValue: 'You cannot suspend or reactivate your own account.' })}</span>;
-        }
         return (
-          <button className={`btn btn-sm ${next === 'active' ? 'btn-outline-success' : 'btn-outline-danger'} d-inline-flex align-items-center gap-1`}
-            disabled={busy || !isSuperAdmin} onClick={() => setPending({ user: row, status: next })}>
-            {next === 'active' ? <CheckCircle2 size={14} /> : <Ban size={14} />}
-            {next === 'active' ? t('platform.enable', { defaultValue: 'Enable' }) : t('platform.disable', { defaultValue: 'Disable' })}
-          </button>
+          <div className="d-inline-flex align-items-center gap-1">
+            {isSuperAdmin && (
+              <button className="btn btn-sm btn-outline-primary"
+                title={t('sections.showPassword', { defaultValue: 'Show password' })}
+                aria-label={t('sections.showPassword', { defaultValue: 'Show password' })}
+                onClick={() => setCredentialFor(row)}>
+                <Eye size={13} />
+              </button>
+            )}
+            {self ? (
+              <span className="small text-muted">{t('platform.selfGuard', { defaultValue: 'You cannot suspend or reactivate your own account.' })}</span>
+            ) : (
+              <button className={`btn btn-sm ${next === 'active' ? 'btn-outline-success' : 'btn-outline-danger'} d-inline-flex align-items-center gap-1`}
+                disabled={busy || !isSuperAdmin} onClick={() => setPending({ user: row, status: next })}>
+                {next === 'active' ? <CheckCircle2 size={14} /> : <Ban size={14} />}
+                {next === 'active' ? t('platform.enable', { defaultValue: 'Enable' }) : t('platform.disable', { defaultValue: 'Disable' })}
+              </button>
+            )}
+          </div>
         );
       },
     },
@@ -137,18 +151,22 @@ export default function PlatformUsersPage() {
           ? t('platform.enableMessage', { defaultValue: 'Give {{name}} access to the platform console again?', name: pending?.user.full_name })
           : t('platform.disableMessage', { defaultValue: 'Deactivate {{name}}? Their console access is revoked on the next request.', name: pending?.user?.full_name })}
         busy={busy} onClose={() => setPending(null)} onConfirm={toggle} />
+
+      <CredentialModal row={credentialFor} onClose={() => setCredentialFor(null)} canReset
+        path={credentialFor ? `/platform/credentials/platform-users/${credentialFor.id}` : ''} />
     </>
   );
 }
 
 function InviteModal({ open, onClose, onInvited }) {
   const { t } = useTranslation();
-  const [values, setValues] = useState({ full_name: '', email: '', role: 'platform_support', phone: '' });
+  const blank = { full_name: '', email: '', role: 'platform_support', phone: '', password: '' };
+  const [values, setValues] = useState(blank);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open) { setValues({ full_name: '', email: '', role: 'platform_support', phone: '' }); setErrors({}); }
+    if (open) { setValues(blank); setErrors({}); }
   }, [open]);
 
   const submit = useCallback(async () => {
@@ -157,6 +175,8 @@ function InviteModal({ open, onClose, onInvited }) {
     if (!isEmail(values.email)) missing.email = t('platform.invalidEmail', { defaultValue: 'Enter a valid email address' });
     if (!PLATFORM_ROLES.includes(values.role)) missing.role = t('platform.pickRole', { defaultValue: 'Pick a platform role' });
     if (String(values.phone || '').length > 32) missing.phone = t('platform.phoneLength', { defaultValue: 'Max 32 characters' });
+    const password = String(values.password || '');
+    if (password && password.length < 8) missing.password = t('platform.passwordTooShort', { defaultValue: 'At least 8 characters' });
     setErrors(missing);
     if (Object.keys(missing).length) return;
 
@@ -164,8 +184,11 @@ function InviteModal({ open, onClose, onInvited }) {
     try {
       const body = { full_name: String(values.full_name).trim(), email: String(values.email).trim(), role: values.role };
       if (String(values.phone || '').trim()) body.phone = String(values.phone).trim();
-      await apiPost('/platform/users', body);
-      toast.success(t('platform.invitationSent', { defaultValue: 'Activation email sent to {{email}}.', email: body.email }));
+      if (password) body.password = password;
+      const { data } = await apiPost('/platform/users', body);
+      toast.success(data?.readyToSignIn
+        ? t('platform.staffReadyToSignIn', { defaultValue: '{{email}} can sign in now with the password you set.', email: body.email })
+        : t('platform.invitationSent', { defaultValue: 'Activation email sent to {{email}}.', email: body.email }));
       onInvited();
     } catch (error) {
       if (error.status === 403) toast.error(t('platform.superAdminOnly', { defaultValue: 'Super Admin access is required for this action.' }));
@@ -179,6 +202,7 @@ function InviteModal({ open, onClose, onInvited }) {
     email: t('common.email'),
     role: t('platform.role', { defaultValue: 'Role' }),
     phone: t('common.phone'),
+    password: t('platform.initialPassword', { defaultValue: 'Initial password (optional)' }),
   }), [t]);
 
   const fields = [
@@ -186,18 +210,26 @@ function InviteModal({ open, onClose, onInvited }) {
     { name: 'email', type: 'email', required: true, col: 12 },
     { name: 'role', type: 'select', required: true, col: 12, options: PLATFORM_ROLES.map((r) => ({ value: r, label: r.replace(/_/g, ' ') })) },
     { name: 'phone', type: 'tel', col: 12 },
+    { name: 'password', type: 'password', col: 12 },
   ];
 
+  const hasPassword = Boolean(String(values.password || '').trim());
+
   return (
-    <Modal open={open} size="sm" title={t('platform.inviteStaff', { defaultValue: 'Invite staff' })} onClose={onClose}
+    <Modal open={open} size="sm"
+      title={hasPassword
+        ? t('platform.createStaffAccount', { defaultValue: 'Create platform account' })
+        : t('platform.inviteStaff', { defaultValue: 'Invite staff' })} onClose={onClose}
       footer={(
         <>
           <button className="btn btn-outline-secondary" onClick={onClose}>{t('common.cancel')}</button>
-          <button className="btn btn-primary" onClick={submit} disabled={busy}>{busy ? '…' : t('platform.sendInvite', { defaultValue: 'Send invitation' })}</button>
+          <button className="btn btn-primary" onClick={submit} disabled={busy}>{busy ? '…' : (hasPassword
+            ? t('platform.createAccount', { defaultValue: 'Create account' })
+            : t('platform.sendInvite', { defaultValue: 'Send invitation' }))}</button>
         </>
       )}>
       <div className="alert alert-info small py-2">
-        {t('platform.inviteHint', { defaultValue: 'An auth invite is generated for the email, the platform account is created as active, the chosen platform role is linked, and the activation link is mailed (7 days).' })}
+        {t('platform.inviteHint', { defaultValue: 'Leave the password blank to mail an activation link (valid 7 days). Type a password instead and the account works immediately with no email — you can reveal that password again later from this page.' })}
       </div>
       <div className="row">
         {fields.map((f) => (

@@ -79,6 +79,7 @@ All variables live in one repo-root `.env`; `server/src/config/env.js` loads it 
 | `SUPABASE_URL` | server | project URL |
 | `SUPABASE_ANON_KEY` | server | used for the user-scoped GoTrue client (sign-in, token refresh) |
 | `SUPABASE_SERVICE_ROLE_KEY` | server | **server only** — never exposed to the browser |
+| `CREDENTIALS_KEY` | server | optional; seals system-issued passwords (§5.1). Falls back to the service-role key, so set it explicitly and keep it stable |
 | `EMAIL_PROVIDER`, `EMAIL_API_KEY`, `EMAIL_FROM` | server | optional; blank = invitation links are logged instead of mailed |
 | `PAYMENT_PROVIDER`, `PAYMENT_API_KEY`, `PAYMENT_WEBHOOK_SECRET` | server | optional; no gateway is simulated (see §6) |
 | `APP_BASE_URL` | server | base URL used in invite/reset links |
@@ -110,8 +111,14 @@ These rules are enforced server-side and are not UI conveniences:
   (`req.auth.permissions` is a `Set`), and the API re-checks the same permission on every verb.
 - **No plaintext secrets.** Passwords are handled by Supabase Auth; invitation tokens are generated
   by GoTrue (`generateLink({ type: 'invite' })`) and redeemed server-side. Nothing is stored as-is.
+  The one deliberate exception is `server/src/services/credentialVault.js`: a password the *system*
+  issued (student ID, admin-set staff password, Super Admin reset) is AES-256-GCM sealed into
+  `auth.users.app_metadata.issued_credential` so it can be read back for the helpdesk. The seal is
+  bound to `<schoolId>:<membershipId>`, and it is deleted the moment the owner changes their own
+  password — a password somebody chose is never recoverable by anyone.
 - **Audited operations.** Sensitive writes (users, roles, billing, settings, approvals, password
-  changes) append to `audit_logs` with the actor, IP and summary.
+  changes) append to `audit_logs` with the actor, IP and summary. Reading a sealed password is
+  audited too (`credential_viewed`) and answered with `Cache-Control: no-store`.
 - **Expiry never deletes data.** Subscriptions move to `past_due` / `expired` and gate features and
   plan limits; school records are retained.
 - **No payment gateway simulation.** Platform staff record manual payments (reference, method, date);
@@ -147,7 +154,7 @@ factory applies the plan caps (`max_students`, `max_staff`, `max_storage_mb`) on
 | Router | Purpose |
 | --- | --- |
 | `auth` | login, refresh, logout, password reset/change, session profile, invite acceptance |
-| `platform` | plans + plan features, school applications/approvals, schools, subscriptions, platform users/roles, support |
+| `platform` | plans + plan features, school applications/approvals, schools, subscriptions, platform users/roles, support, sign-in helpdesk (§5.1) |
 | `school` | dashboard builder, users & role assignment, roles list, settings, profile, reports (CSV), storage |
 | `resources` | CRUD factory mounted for every school-scoped module (academic years, classes, subjects, students, staff, attendance, examinations, finance, library, learning, transport, certificates…) |
 | `flows` | multi-step operations (results approval/publish, fee assignment, promotion, transfers, imports) |
@@ -161,6 +168,31 @@ List endpoints return `{ data, total, page, pageSize }`; errors return
 CSV reports: `GET /school/reports/{students|staff|payments|expenses|attendance-summary|discipline}`.
 They require the bearer token, so the client downloads them as authenticated blobs
 (`downloadFile()` in `client/src/api/client.js`).
+
+### 5.1 Sign-in helpdesk
+
+A school that cannot get in is a support call, and the operator answering it needs two things: a way
+to read a password the system handed out, and a way to hand out a new one. These are the only routes
+in the API that look across tenants, so they are Super Admin-only, every read is audited, and the
+response is marked `no-store`.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /platform/schools/:id/users` | The tenant's accounts (`school_users` page), with `has_sign_in` instead of the auth id |
+| `GET /platform/credentials/school-users/:id` | Reveal that person's issued password; a student still on their first sign-in reports their admission number |
+| `POST /platform/credentials/school-users/:id/reset` | Set a password or `generate: true`; the account holder is asked to change it at next sign-in, and an inbox alert tells them it happened |
+| `GET /platform/credentials/platform-users/:id` · `POST …/reset` | The same, for platform staff accounts |
+| `GET /platform/credentials/me` · `POST /platform/credentials/me/password` | The signed-in operator's own password. Setting it here keeps a recoverable copy, because losing the only console account would lock the whole team out |
+
+The rule the screens make explicit: **issued is readable, chosen is not.** Supabase stores a one-way
+hash, so when nobody can reveal a password the answer is a reset, never a guess — and the reset is
+deliberately flagged `must_change_password`. `POST /platform/users` takes the same split: leave
+`password` out and it mails a 7-day activation link; supply one and the account works immediately and
+its password shows up in the reveal dialog.
+
+The `POST /platform/credentials/me/password` reply carries fresh session tokens: GoTrue revokes the
+old session when the password changes, and `/auth/update-password` has always signed the user back in.
+School-side passwords set by their owners keep clearing `issued_credential`, so they stay private.
 
 ---
 
@@ -317,4 +349,13 @@ Twelve checks, in the order that builds on itself. Two of them (11 and 12) need 
   (expected: the inbox refreshes on load instead), or the client bundle predates them — rebuild.
 - **Priority filter is greyed out, or Automated notices says it needs migration 0025** — that
   database has not run `supabase/migrations/0025_notification_ops.sql` yet.
+- **Reveal password answers "This person set their own password…"** — working as intended. Only a
+  password the system issued has a sealed copy; use *Generate a new password* (§5.1) to give them a
+  fresh one, which then stays readable until they change it themselves.
+- **A new platform account got no activation email** — expected when the invite dialog was given a
+  password: that account is ready to sign in immediately and its password is readable from the same
+  screen. Leave the field blank to send the 7-day activation link instead.
+- **Revealed passwords read back as blank after a server move** — the vault key is
+  `sha256(CREDENTIALS_KEY || SUPABASE_SERVICE_ROLE_KEY)`. If both changed, old seals cannot be
+  opened; reset those accounts. Set `CREDENTIALS_KEY` and keep it stable across deployments.
 

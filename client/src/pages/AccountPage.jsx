@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
-import { Bell, BellOff, KeyRound, Save } from 'lucide-react';
-import { apiPost, tokens } from '../api/client.js';
+import { Bell, BellOff, Eye, EyeOff, KeyRound, Save } from 'lucide-react';
+import { apiGet, apiPost, tokens } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
-import { PageHeader, Badge } from '../components/ui/Basics.jsx';
+import { PageHeader, Badge, Spinner } from '../components/ui/Basics.jsx';
 import Field from '../components/ui/Field.jsx';
 import { humanize } from '../config/resources.jsx';
 
@@ -15,6 +15,10 @@ export default function AccountPage() {
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const isStudentLogin = /@students\.e-madaaris\.local$/i.test(profile?.email || '');
+  // Platform operators sign in to one console for the whole service, so their password keeps a
+  // recoverable copy: a lost one would lock the team out of every tenant at once.
+  const isPlatform = profile?.type === 'platform';
+  const [own, setOwn] = useState({ state: 'idle', password: '', error: '' });
   const [push, setPush] = useState({
     busy: false,
     configured: null,
@@ -62,16 +66,36 @@ export default function AccountPage() {
     }
   };
 
+  const revealOwn = async () => {
+    setOwn({ state: 'loading', password: '', error: '' });
+    try {
+      const { data } = await apiGet('/platform/credentials/me');
+      setOwn({ state: 'shown', password: data.password, error: '' });
+    } catch (e) {
+      setOwn({ state: 'error', password: '', error: e.message });
+    }
+  };
+
+  const copyOwn = async () => {
+    try {
+      await navigator.clipboard.writeText(own.password);
+      toast.success(t('sections.copied', { defaultValue: 'Copied' }));
+    } catch { toast.error(t('sections.copyFailed', { defaultValue: 'Copying was blocked by the browser.' })); }
+  };
+
   const changePassword = async () => {
     if (password.length < 8) { toast.error('Use at least 8 characters'); return; }
     if (password !== confirm) { toast.error('The two passwords do not match'); return; }
     setBusy(true);
     try {
-      const { data } = await apiPost('/auth/update-password', { password });
+      const { data } = await apiPost(isPlatform ? '/platform/credentials/me/password' : '/auth/update-password', { password });
       // The server revokes the old session with the password; adopt the fresh one it returns.
       if (data.tokens) tokens.set(data.tokens);
-      toast.success(t('account.passwordChanged', { defaultValue: 'Password updated' }));
+      toast.success(isPlatform
+        ? t('account.platformPasswordSaved', { defaultValue: 'Password updated — a recoverable copy is kept for the platform team.' })
+        : t('account.passwordChanged', { defaultValue: 'Password updated' }));
       setPassword(''); setConfirm('');
+      setOwn({ state: 'idle', password: '', error: '' });
       await refresh();
     } catch (e) { toast.error(e.message); } finally { setBusy(false); }
   };
@@ -111,6 +135,45 @@ export default function AccountPage() {
             <button className="btn btn-primary btn-sm d-flex align-items-center gap-1" onClick={changePassword} disabled={busy}>
               <Save size={14} /> {busy ? '…' : t('account.updatePassword', { defaultValue: 'Update password' })}
             </button>
+            {isPlatform && (
+              <div className="mt-3 pt-3 border-top">
+                {own.state === 'idle' && (
+                  <button type="button" className="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1" onClick={revealOwn}>
+                    <Eye size={14} /> {t('account.showMyPassword', { defaultValue: 'Show my current password' })}
+                  </button>
+                )}
+                {own.state === 'loading' && <Spinner label={t('common.loading')} />}
+                {own.state === 'shown' && (
+                  <div className="credential-card">
+                    <div className="credential-row">
+                      <span className="small text-muted">{t('sections.password', { defaultValue: 'Password' })}</span>
+                      <div className="d-inline-flex align-items-center gap-1">
+                        <span className="credential-value">{own.password}</span>
+                        <button type="button" className="btn btn-sm btn-outline-secondary"
+                          aria-label={t('sections.hidePassword', { defaultValue: 'Hide password' })}
+                          onClick={() => setOwn({ state: 'idle', password: '', error: '' })}>
+                          <EyeOff size={13} />
+                        </button>
+                        <button type="button" className="btn btn-sm btn-outline-primary" onClick={copyOwn}>
+                          {t('sections.copyPassword', { defaultValue: 'Copy' })}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {own.state === 'error' && (
+                  <>
+                    <div className="alert alert-warning small py-2 mb-2">{own.error}</div>
+                    <button type="button" className="btn btn-sm btn-outline-secondary" onClick={revealOwn}>
+                      {t('common.tryAgain', { defaultValue: 'Try again' })}
+                    </button>
+                  </>
+                )}
+                <div className="small text-muted mt-2">
+                  {t('account.platformPasswordNote', { defaultValue: 'Setting your password here keeps one recoverable copy for the platform team, so a lost password cannot lock you out of the console. School staff and student passwords you choose stay private.' })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <div className="col-12 col-lg-6">

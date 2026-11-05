@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { db, requireDb } from '../config/supabase.js';
+import { db, dbAnon, requireDb } from '../config/supabase.js';
 import { env } from '../config/env.js';
 import { ApiError } from '../middleware/error.js';
 import { requirePlatform, requireSuperAdmin } from '../middleware/rbac.js';
@@ -11,6 +11,10 @@ import { createBackup, listPlatformBackups, getBackupPayload, setAutoBackup, aut
 import { clearSchoolData } from '../services/schoolData.js';
 import { listTrash, restoreTrashItem, purgeTrashItem, emptyTrashForSchool, emptyPlatformTrash, closeTrashForSchool } from '../services/trash.js';
 import { sendMail } from '../services/mailer.js';
+import { temporaryPassword } from '../services/authIdentity.js';
+import {
+  credentialFlags, getIssuedCredential, setIssuedCredential,
+} from '../services/credentialVault.js';
 import {
   SITE_CONTENT_PAGES, isSiteContentKey,
   readSiteContent, writeSiteContent, clearSiteContent, assertSiteContent,
@@ -506,26 +510,63 @@ platformRouter.post('/users', requireSuperAdmin, async (req, res, next) => {
     const body = z.object({
       full_name: z.string().trim().min(2), email: z.string().email(),
       role: z.enum(['super_admin', 'platform_support']), phone: trimStr(32).optional(),
+      password: z.string().min(8).max(72).optional(),
+      generate: z.boolean().optional(),
+    }).refine((v) => !(v.password && v.generate), {
+      message: 'Set a password or ask the server to generate one, not both',
     }).parse(req.body);
     const supabase = requireDb();
-    const { data: link, error } = await supabase.auth.admin.generateLink({
-      type: 'invite', email: body.email,
-      options: { data: { full_name: body.full_name, platform_role: body.role }, redirectTo: `${env.frontendUrl}/login` },
-    });
-    if (error) throw new ApiError(500, error.message);
+    const password = body.generate ? temporaryPassword() : body.password;
+
+    let authUserId;
+    let activationLink = null;
+    if (password) {
+      // A ready-to-sign-in account. This is the recovery route: a Super Admin who cannot get at their
+      // own sign-in can open a second one from the console instead of waiting on an email they may not
+      // be able to read. The password is sealed in the vault, so it is never echoed back here.
+      const { data: created, error } = await supabase.auth.admin.createUser({
+        email: body.email, password, email_confirm: true,
+        user_metadata: { full_name: body.full_name, access_level: 'platform' },
+      });
+      if (error) {
+        throw new ApiError(error.code === 'email_exists' || /already/i.test(error.message) ? 409 : 500, error.message);
+      }
+      authUserId = created.user.id;
+    } else {
+      const { data: link, error } = await supabase.auth.admin.generateLink({
+        type: 'invite', email: body.email,
+        options: { data: { full_name: body.full_name, platform_role: body.role }, redirectTo: `${env.frontendUrl}/login` },
+      });
+      if (error) throw new ApiError(500, error.message);
+      authUserId = link.user.id;
+      activationLink = link.properties?.action_link || null;
+    }
+
     const { data: pu, error: e2 } = await supabase.from('platform_users').insert({
-      auth_user_id: link.user.id, full_name: body.full_name, email: body.email, phone: body.phone, status: 'active',
+      auth_user_id: authUserId, full_name: body.full_name, email: body.email, phone: body.phone, status: 'active',
     }).select().single();
     if (e2) throw new ApiError(500, e2.message);
     const { data: role } = await supabase.from('platform_roles').select('id').eq('name', body.role).maybeSingle();
     if (role) await supabase.from('platform_user_roles').insert({ user_id: pu.id, role_id: role.id });
-    await sendMail({
-      to: body.email, template: 'staff_invitation',
-      variables: { user_name: body.full_name, school_name: 'E-MADAARIS Platform', role: body.role,
-        invitation_link: link.properties?.action_link || `${env.frontendUrl}/login`, expires_at: new Date(Date.now() + 7 * 86400000).toDateString() },
+
+    if (password) {
+      try {
+        await setIssuedCredential(authUserId, { membershipId: pu.id, password });
+      } catch (error) { req.log?.warn({ err: error }, 'platform credential could not be sealed'); }
+    } else {
+      await sendMail({
+        to: body.email, template: 'staff_invitation',
+        variables: { user_name: body.full_name, school_name: 'E-MADAARIS Platform', role: body.role,
+          invitation_link: activationLink || `${env.frontendUrl}/login`, expires_at: new Date(Date.now() + 7 * 86400000).toDateString() },
+      });
+    }
+    await audit(req, {
+      module: 'platform_users', action: 'created', recordId: pu.id,
+      summary: password
+        ? `${body.email} as ${body.role} (password set at creation)`
+        : `${body.email} as ${body.role} (invitation mailed)`,
     });
-    await audit(req, { module: 'platform_users', action: 'created', recordId: pu.id, summary: `${body.email} as ${body.role}` });
-    res.status(201).json({ data: { user: pu, activationLink: link.properties?.action_link } });
+    res.status(201).json({ data: { user: pu, activationLink, readyToSignIn: Boolean(password) } });
   } catch (e) { next(e); }
 });
 
@@ -537,6 +578,234 @@ platformRouter.patch('/users/:id/status', requireSuperAdmin, async (req, res, ne
     if (!data) throw new ApiError(404, 'Not found');
     await audit(req, { module: 'platform_users', action: 'status_changed', recordId: data.id, summary: status });
     res.json({ data });
+  } catch (e) { next(e); }
+});
+
+// ── Sign-in credentials (Super Admin helpdesk) ───────────────────
+/**
+ * Supabase Auth keeps a one-way hash, so a password is readable only when this system issued it and the
+ * credential vault still holds the sealed copy. These routes reach across tenants that are otherwise
+ * invisible to each other, so they are Super Admin-only, every read is audited, and nothing is cached.
+ * When the owner chose their own password the answer is a reset, never a guess.
+ */
+const UNRECOVERABLE = 'This person set their own password, so it cannot be recovered. Reset it to issue a new one.';
+
+async function schoolCredentialTarget(supabase, schoolUserId) {
+  const { data, error } = await supabase.from('school_users')
+    .select('id, school_id, auth_user_id, full_name, email, status').eq('id', schoolUserId).maybeSingle();
+  if (error) throw new ApiError(500, error.message);
+  if (!data) throw new ApiError(404, 'No such user in any school.');
+  if (!data.auth_user_id) throw new ApiError(409, 'This account has not accepted its invitation yet, so it has no password here.');
+  return data;
+}
+
+async function platformCredentialTarget(supabase, platformUserId) {
+  const { data, error } = await supabase.from('platform_users')
+    .select('id, auth_user_id, full_name, email, status').eq('id', platformUserId).maybeSingle();
+  if (error) throw new ApiError(500, error.message);
+  if (!data) throw new ApiError(404, 'No such platform staff account.');
+  if (!data.auth_user_id) throw new ApiError(409, 'This account has not accepted its invitation yet, so it has no password here.');
+  return data;
+}
+
+/** Names the tenant in the audit sentence, because a platform action carries no school of its own. */
+async function tenantLabel(supabase, schoolId) {
+  const { data } = await supabase.from('schools').select('school_name').eq('id', schoolId).maybeSingle();
+  return data?.school_name ? ` · ${data.school_name}` : '';
+}
+
+platformRouter.get('/schools/:id/users', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Number(req.query.pageSize) || 50);
+    const search = sanitizeSearch(req.query.q);
+    let q = requireDb().from('school_users')
+      .select('id, full_name, email, phone, status, auth_user_id', { count: 'exact' })
+      .eq('school_id', uuid.parse(req.params.id));
+    if (search) q = q.or(`full_name.ilike.%${search}%,email.ilike.%${search}%`);
+    const { data, error, count } = await q.order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+    if (error) throw new ApiError(500, error.message);
+    // The auth id stays server-side: the client only needs to know a sign-in exists.
+    res.json({
+      data: (data || []).map(({ auth_user_id, ...user }) => ({ ...user, has_sign_in: Boolean(auth_user_id) })),
+      total: count || 0, page, pageSize,
+    });
+  } catch (e) { next(e); }
+});
+
+platformRouter.get('/credentials/school-users/:schoolUserId', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const supabase = requireDb();
+    const target = await schoolCredentialTarget(supabase, uuid.parse(req.params.schoolUserId));
+    const issued = await getIssuedCredential(target.auth_user_id, { schoolId: target.school_id, membershipId: target.id });
+    if (issued?.password) {
+      await audit(req, {
+        module: 'platform_users', action: 'credential_viewed', recordId: target.id,
+        summary: `${target.email || target.full_name}${await tenantLabel(supabase, target.school_id)} (issued password revealed)`,
+        metadata: { school_id: target.school_id },
+      });
+      res.set('Cache-Control', 'no-store');
+      return res.json({ data: { ...target, password: issued.password, issued_at: issued.issuedAt, source: 'issued' } });
+    }
+
+    // A student signs in with their admission number until they change it, so that number is the
+    // password — but only while the account still carries the must-change flag.
+    const { data: student } = await supabase.from('students').select('admission_number')
+      .eq('school_id', target.school_id).eq('user_id', target.id).maybeSingle();
+    if (student?.admission_number) {
+      const flags = await credentialFlags(target.auth_user_id);
+      if (flags.mustChangePassword) {
+        await audit(req, {
+          module: 'platform_users', action: 'credential_viewed', recordId: target.id,
+          summary: `${target.email || target.full_name}${await tenantLabel(supabase, target.school_id)} (student ID password revealed)`,
+          metadata: { school_id: target.school_id },
+        });
+        res.set('Cache-Control', 'no-store');
+        return res.json({ data: { ...target, password: student.admission_number, source: 'student-id' } });
+      }
+    }
+    throw new ApiError(404, UNRECOVERABLE);
+  } catch (e) { next(e); }
+});
+
+platformRouter.post('/credentials/school-users/:schoolUserId/reset', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const body = z.object({
+      password: z.string().min(8).max(72).optional(),
+      generate: z.boolean().optional(),
+    }).refine((v) => Boolean(v.password) !== Boolean(v.generate), {
+      message: 'Provide a new password or ask the server to generate one, not both',
+    }).parse(req.body);
+    const password = body.generate ? temporaryPassword() : body.password;
+    const supabase = requireDb();
+    const target = await schoolCredentialTarget(supabase, uuid.parse(req.params.schoolUserId));
+
+    const { error } = await supabase.auth.admin.updateUserById(target.auth_user_id, {
+      password, email_confirm: true, app_metadata: { must_change_password: true },
+    });
+    if (error) throw new ApiError(500, error.message);
+    if (target.status === 'pending_verification') {
+      await supabase.from('school_users').update({ status: 'active', email_verified: true }).eq('id', target.id);
+    }
+    try {
+      await setIssuedCredential(target.auth_user_id, { schoolId: target.school_id, membershipId: target.id, password });
+    } catch (error) { req.log?.warn({ err: error }, 'reset password could not be sealed'); }
+
+    const tenant = await tenantLabel(supabase, target.school_id);
+    await audit(req, {
+      module: 'platform_users', action: 'password_reset', recordId: target.id,
+      summary: `${target.email || target.full_name}${tenant} (password reset from the platform console)`,
+      metadata: { school_id: target.school_id },
+    });
+    alertUsers(req, [target.id], {
+      scope: 'school', schoolId: target.school_id, category: 'account',
+      title: 'Your password was reset',
+      body: 'The E-MADAARIS platform team reset your sign-in password at your school\u2019s request. '
+        + 'The new password was given to you directly; change it at your next sign-in.',
+      link: '/account',
+    });
+    res.json({ data: { ok: true, ...(body.generate ? { temporaryPassword: password } : {}) } });
+  } catch (e) { next(e); }
+});
+
+platformRouter.get('/credentials/platform-users/:id', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const supabase = requireDb();
+    const target = await platformCredentialTarget(supabase, uuid.parse(req.params.id));
+    const issued = await getIssuedCredential(target.auth_user_id, { membershipId: target.id });
+    if (!issued?.password) throw new ApiError(404, UNRECOVERABLE);
+    await audit(req, {
+      module: 'platform_users', action: 'credential_viewed', recordId: target.id,
+      summary: `${target.email || target.full_name} (platform password revealed)`,
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json({ data: { ...target, password: issued.password, issued_at: issued.issuedAt, source: 'issued' } });
+  } catch (e) { next(e); }
+});
+
+platformRouter.post('/credentials/platform-users/:id/reset', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const body = z.object({
+      password: z.string().min(8).max(72).optional(),
+      generate: z.boolean().optional(),
+    }).refine((v) => Boolean(v.password) !== Boolean(v.generate), {
+      message: 'Provide a new password or ask the server to generate one, not both',
+    }).parse(req.body);
+    const password = body.generate ? temporaryPassword() : body.password;
+    const supabase = requireDb();
+    const target = await platformCredentialTarget(supabase, uuid.parse(req.params.id));
+    const { error } = await supabase.auth.admin.updateUserById(target.auth_user_id, {
+      password, email_confirm: true, app_metadata: { must_change_password: true },
+    });
+    if (error) throw new ApiError(500, error.message);
+    try {
+      await setIssuedCredential(target.auth_user_id, { membershipId: target.id, password });
+    } catch (e) { req.log?.warn({ err: e }, 'platform reset could not be sealed'); }
+    await audit(req, {
+      module: 'platform_users', action: 'password_reset', recordId: target.id,
+      summary: `${target.email || target.full_name} (platform password reset)`,
+    });
+    alertUsers(req, [target.id], {
+      scope: 'platform', category: 'account', title: 'Your password was reset',
+      body: 'A Super Admin reset your platform console password. The new password was given to you directly.',
+      link: '/account',
+    });
+    res.json({ data: { ok: true, ...(body.generate ? { temporaryPassword: password } : {}) } });
+  } catch (e) { next(e); }
+});
+
+/**
+ * The signed-in operator's own password. Reading it back is possible only for a password this system
+ * issued, which is exactly the case that strands someone: an account created with an admin-set password
+ * they never changed.
+ */
+platformRouter.get('/credentials/me', async (req, res, next) => {
+  try {
+    const target = await platformCredentialTarget(requireDb(), req.auth.userId);
+    const issued = await getIssuedCredential(target.auth_user_id, { membershipId: target.id });
+    if (!issued?.password) {
+      throw new ApiError(404, 'You chose this password yourself, so no copy of it exists. Set a new one here to keep a recoverable copy.');
+    }
+    await audit(req, { module: 'platform_users', action: 'credential_viewed', recordId: target.id, summary: 'own platform password revealed' });
+    res.set('Cache-Control', 'no-store');
+    res.json({ data: { password: issued.password, issued_at: issued.issuedAt, source: 'issued' } });
+  } catch (e) { next(e); }
+});
+
+/**
+ * Sets the operator's own password and seals the new value, so the console stays reachable after a
+ * machine is lost. This is the one place a password becomes recoverable by choice rather than by
+ * provisioning; school users keep their self-set passwords private.
+ */
+platformRouter.post('/credentials/me/password', async (req, res, next) => {
+  try {
+    const { password } = z.object({ password: z.string().min(8).max(72) }).parse(req.body);
+    const supabase = requireDb();
+    const target = await platformCredentialTarget(supabase, req.auth.userId);
+    const { error } = await supabase.auth.admin.updateUserById(req.auth.authUserId, {
+      password, app_metadata: { must_change_password: false },
+    });
+    if (error) throw new ApiError(500, error.message);
+    try {
+      await setIssuedCredential(req.auth.authUserId, { membershipId: req.auth.userId, password });
+    } catch (e) {
+      req.log?.warn({ err: e }, 'own password could not be sealed; it stays unrecoverable');
+    }
+    await audit(req, {
+      module: 'platform_users', action: 'password_changed', recordId: req.auth.userId,
+      summary: 'own platform password set from the console (recoverable copy stored)',
+    });
+    // GoTrue revokes the old session when the password changes, so sign in again with the new one and
+    // hand the fresh tokens back — otherwise setting a password would log the operator out.
+    let session = null;
+    if (target.email) {
+      const { data: signed } = await dbAnon().auth.signInWithPassword({ email: target.email, password });
+      if (signed?.session) {
+        session = { accessToken: signed.session.access_token, refreshToken: signed.session.refresh_token };
+      }
+    }
+    res.json({ data: { ok: true, tokens: session } });
   } catch (e) { next(e); }
 });
 

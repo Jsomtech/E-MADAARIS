@@ -164,7 +164,8 @@
     "phone": "Teleefan",
     "email": "Iimel",
     "previous": "Kii hore",
-    "type": "Nooca"
+    "type": "Nooca",
+    "tryAgain": "Isku day mar kale"
   },
   "nav": {
     "overview": "Guudmar",
@@ -855,7 +856,10 @@
     "pushOn": "Shiran qalabkan",
     "pushOff": "Aan shirnayn",
     "pushBlocked": "Ogeysiisyada boggan waa la xannibay. Browser-ka u ogolow, kadibna mar kale isku day.",
-    "pushNotConfigured": "Firebase weli lama diyaarin. Furayaasha Firebase-ka ee webka ku qor client/.env, kadibna abliikishinka dib u bilow."
+    "pushNotConfigured": "Firebase weli lama diyaarin. Furayaasha Firebase-ka ee webka ku qor client/.env, kadibna abliikishinka dib u bilow.",
+    "showMyPassword": "I tus eraygayga sirta ah",
+    "platformPasswordNote": "Marka aad halkan ka dejiso eraygaaga sirta ah, hal koobi oo la soo kaban karo ayaa loo hayaa kooxda platform-ka, si eray la illoobay uusan kaaga xirin console-ka. Erayada shaqaalaha dugsiga iyo ardaydu ay doortaan way qarsoon yihiin.",
+    "platformPasswordSaved": "Erayga sirta ah waa la beddelay — koobi la soo kaban karo ayaa loo hayaa kooxda platform-ka."
   },
   "composer": {
     "title": "Dir ogeysiis",
@@ -975,6 +979,20 @@
     "workingDays": "Maalmaha shaqada dugsiga",
     "workingDaysHelp": "Waa lagu kaydiyaa school_working_days text[] — caadiga tiirka {Sat, Sun, Mon, Tue, Wed}. La doortay: {{days}}",
     "yearHelp": "Waxa laga soo helay GET /academic-years; safka is_current leh waxaa lagu calaamadeeyay \"(firfircoon)\". Halkan academic_year_id oo keliya ayaa la kaydiyaa.",
-    "pickSchool": "Dooro dugsi…"
+    "pickSchool": "Dooro dugsi…",
+    "showPasswordTitle": "Erayga sirta ah",
+    "person": "Qofka",
+    "password": "Erayga sirta ah",
+    "showPassword": "Muuji erayga sirta ah",
+    "hidePassword": "Qari erayga sirta ah",
+    "copyPassword": "Koobiyeeyo",
+    "copied": "La koobiyeeyay",
+    "copyFailed": "Browser-ka ayaa diiday inuu koobiyeeyo.",
+    "studentIdPasswordNote": "Kani waa erayga sirta ah ee ugu horreeya ardayga (lambariisa ardaynimada). Ma aha mid la arki karo marka uu ardaygu eray cusub dejiyo.",
+    "issuedPasswordNote": "Eraygan waxaa soo saaray nidaamka ama maamulaha. Wuu ku arkaya halkan ilaa uu qofku ka beddelo qaybta Akaanta iyo amniga.",
+    "generatedPasswordNote": "Eray sir ah oo cusub ayaa la soo saaray. Qofka waxaa la weydiisanayaa inuu beddelo markuu soo galo.",
+    "revealUnavailableHint": "Fur akoonka adigoo isticmaalaya “Wax ka beddel”, kadibna isticmaal “Dib u deji erayga sirta ah” si aad u soo saarto mid kumeel gaar ah. Marka uu isagu dejiyo eraygiisa, mar kale ma aha mid la arki karo.",
+    "revealResetHint": "Soo saar eray sir ah oo cusub si aad u siiso fursad cusub oo soo galitaan. Waa la arki karaa halkan ilaa uu isagu dejiyo midkiisa.",
+    "generateNewPassword": "Soo saar eray sir ah oo cusub"
   }
 }

@@ -164,7 +164,8 @@
     "phone": "Phone",
     "email": "Email",
     "previous": "Previous",
-    "type": "Type"
+    "type": "Type",
+    "tryAgain": "Try again"
   },
   "nav": {
     "overview": "Overview",
@@ -855,7 +856,10 @@
     "studentLogin": "Student ID sign-in",
     "subtitle": "Your profile, language and security.",
     "tempPasswordWarning": "You are still using the temporary password created for you. Set your own password below so only you know it.",
-    "updatePassword": "Update password"
+    "updatePassword": "Update password",
+    "showMyPassword": "Show my current password",
+    "platformPasswordNote": "Setting your password here keeps one recoverable copy for the platform team, so a lost password cannot lock you out of the console. Passwords chosen by school staff and students stay private.",
+    "platformPasswordSaved": "Password updated — a recoverable copy is kept for the platform team."
   },
   "composer": {
     "addressed": "addressed",
@@ -975,6 +979,20 @@
     "workingDays": "School working days",
     "workingDaysHelp": "Stored as school_working_days text[] — column default {Sat, Sun, Mon, Tue, Wed}. Selected: {{days}}",
     "yearHelp": "Listed from GET /academic-years; the row flagged is_current is marked \"(current)\". Only academic_year_id is stored here.",
-    "pickSchool": "Select a school…"
+    "pickSchool": "Select a school…",
+    "showPasswordTitle": "Password",
+    "person": "Person",
+    "password": "Password",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "copyPassword": "Copy",
+    "copied": "Copied",
+    "copyFailed": "Copying was blocked by the browser.",
+    "studentIdPasswordNote": "This is the student’s first password (their student ID). It stops being readable as soon as the student sets a new password.",
+    "issuedPasswordNote": "This password was issued by the system or an administrator. It remains visible here until the person changes it from Account & security.",
+    "generatedPasswordNote": "A new password was just issued. The account holder is asked to change it at their next sign-in.",
+    "revealUnavailableHint": "Open the account with “Edit” and use Reset password to issue a new temporary password. Once they set their own password it becomes private again.",
+    "revealResetHint": "Generate a new password to hand them a fresh sign-in. It stays readable here until they set their own.",
+    "generateNewPassword": "Generate a new password"
   }
 }

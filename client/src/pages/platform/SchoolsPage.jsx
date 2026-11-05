@@ -5,16 +5,18 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import {
-  ArrowLeft, Building2, CalendarClock, Eye, Gauge, GraduationCap, Info, Loader2, PauseCircle,
+  ArrowLeft, Building2, CalendarClock, Eye, Gauge, GraduationCap, Info, KeyRound, Loader2, PauseCircle,
   Pencil, PlayCircle, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users, Wallet,
 } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { apiDelete, apiPatch, apiPost, apiSweep, sweepFailure } from '../../api/client.js';
+import CredentialModal from '../../components/CredentialModal.jsx';
 import DataTable from '../../components/ui/DataTable.jsx';
 import Field from '../../components/ui/Field.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import {
-  EmptyState, ErrorState, PageHeader, Spinner, StatCard, StatusBadge, dateOnly, money as formatMoney,
+  Badge, EmptyState, ErrorState, PageHeader, Spinner, StatCard, StatusBadge, dateOnly, money as formatMoney,
 } from '../../components/ui/Basics.jsx';
 
 /** Allowed values of PATCH /platform/schools/:id/status (server SCHOOL_STATUSES). */
@@ -699,6 +701,7 @@ function ClearDataModal({ row, onClose, onSaved }) {
 // ── Detail view ─────────────────────────────────────────────────
 function SchoolDetail({ id }) {
   const { t } = useTranslation();
+  const { profile } = useAuth();
   const detail = useApi(`/platform/schools/${id}`);
   const invoices = useApi('/platform/invoices', { school_id: id });
   const [form, setForm] = useState(null);
@@ -706,6 +709,11 @@ function SchoolDetail({ id }) {
   const [limitsRow, setLimitsRow] = useState(null);
   const [trialOpen, setTrialOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
+  const [credentialFor, setCredentialFor] = useState(null);
+
+  // Helpdesk only: Super Admin may read the sign-in credentials a tenant's people were issued.
+  const isSuperAdmin = profile?.primaryRole === 'super_admin' || (profile?.roles || []).includes('super_admin');
+  const tenantUsers = useApi(`/platform/schools/${id}/users`, { pageSize: 100 }, isSuperAdmin);
 
   const school = detail.data;
   const usage = school?.usage || {};
@@ -727,6 +735,42 @@ function SchoolDetail({ id }) {
     { key: 'total', label: t('common.amount'), render: (r) => <span className="tabular-nums">{formatMoney(r.total, r.currency)}</span> },
     { key: 'status', label: t('common.status'), type: 'status' },
     { key: 'due_date', label: t('platform.dueDate', { defaultValue: 'Due date' }), type: 'date' },
+  ];
+
+  const credentialColumns = [
+    {
+      key: 'full_name',
+      label: t('common.name', { defaultValue: 'Name' }),
+      render: (row) => (
+        <div>
+          <div className="fw-semibold">{row.full_name}</div>
+          <div className="small text-muted">{row.email || '—'}</div>
+        </div>
+      ),
+    },
+    { key: 'status', label: t('common.status'), type: 'status', width: 140 },
+    {
+      key: 'has_sign_in',
+      label: t('platform.signIn', { defaultValue: 'Sign-in' }),
+      width: 130,
+      render: (row) => (row.has_sign_in
+        ? <Badge tone="info">{t('platform.canSignIn', { defaultValue: 'can sign in' })}</Badge>
+        : <span className="small text-muted">{t('platform.noSignInYet', { defaultValue: 'invited, no password yet' })}</span>),
+    },
+    {
+      key: 'actions',
+      label: t('common.actions'),
+      width: 90,
+      className: 'text-end',
+      render: (row) => (
+        <button className="btn btn-sm btn-outline-primary" disabled={!row.has_sign_in}
+          title={t('sections.showPassword', { defaultValue: 'Show password' })}
+          aria-label={t('sections.showPassword', { defaultValue: 'Show password' })}
+          onClick={() => setCredentialFor(row)}>
+          <Eye size={13} />
+        </button>
+      ),
+    },
   ];
 
   return (
@@ -830,11 +874,30 @@ function SchoolDetail({ id }) {
         </div>
       </div>
 
+      {isSuperAdmin && (
+        <div className="row g-3 mt-1">
+          <div className="col-12">
+            <div className="fw-semibold mb-2 small text-uppercase text-muted">
+              <KeyRound size={14} className="me-1" />{t('platform.signInCredentials', { defaultValue: 'Sign-in credentials' })}
+            </div>
+            <div className="small text-muted mb-2">
+              {t('platform.credentialsCardHint', { defaultValue: 'Read a password the system issued to someone on this tenant, or hand them a new one when they cannot get in. A password the person chose themselves is never readable here.' })}
+            </div>
+            <DataTable columns={credentialColumns} rows={tenantUsers.data} loading={tenantUsers.loading}
+              error={tenantUsers.error} onRetry={tenantUsers.reload}
+              empty={t('platform.noTenantUsers', { defaultValue: 'No accounts on this tenant yet' })} dense />
+          </div>
+        </div>
+      )}
+
       <SchoolFormModal state={form} onClose={() => setForm(null)} onSaved={() => { setForm(null); detail.reload(); }} />
       <StatusModal row={statusRow} onClose={() => setStatusRow(null)} onSaved={() => { setStatusRow(null); detail.reload(); }} />
       <LimitsModal row={limitsRow} onClose={() => setLimitsRow(null)} onSaved={() => { setLimitsRow(null); detail.reload(); }} />
       <ExtendTrialModal open={trialOpen} subscription={currentSub} school={school} onClose={() => setTrialOpen(false)} onSaved={() => { setTrialOpen(false); detail.reload(); }} />
       <ClearDataModal row={clearOpen ? school : null} onClose={() => setClearOpen(false)} onSaved={() => { setClearOpen(false); detail.reload(); }} />
+      <CredentialModal row={credentialFor} onClose={() => setCredentialFor(null)} canReset
+        path={credentialFor ? `/platform/credentials/school-users/${credentialFor.id}` : ''}
+        onChanged={tenantUsers.reload} />
     </>
   );
 }
