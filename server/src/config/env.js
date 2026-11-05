@@ -18,6 +18,9 @@ export const env = {
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
   credentialsKey: process.env.CREDENTIALS_KEY || '',
   emailProvider: process.env.EMAIL_PROVIDER || '',
+  // Both names are accepted: EMAIL_API_KEY is this project's, RESEND_API_KEY is what Resend's own
+  // dashboard docs call it.
+  emailApiKey: process.env.EMAIL_API_KEY || process.env.RESEND_API_KEY || '',
   emailFrom: process.env.EMAIL_FROM || 'no-reply@e-madaaris.com',
   // Seconds. A confirmation link is a credential-bearing URL, so the window is clamped to
   // 15 minutes .. 30 days however it is configured; unset means seven days.

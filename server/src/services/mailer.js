@@ -38,7 +38,7 @@ export async function sendMail({ to, subject, html, template, variables = {} }) 
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.EMAIL_API_KEY}`,
+        Authorization: `Bearer ${env.emailApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ from: env.emailFrom, to, subject, html }),
