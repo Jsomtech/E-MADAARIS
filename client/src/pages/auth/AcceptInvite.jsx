@@ -29,24 +29,22 @@ export default function AcceptInvite() {
   /* Step 1 — the backend redeems the GoTrue invite token and hands us a session. */
   useEffect(() => {
     if (!token || redeemed.current === token) return;
-    let alive = true;
     redeemed.current = token;
     setPhase('verifying');
     setMessage(null);
-    (async () => {
-      try {
-        const { data } = await apiPost('/auth/verify-invitation', { token });
-        if (!alive) return;
+    // Not cancelled on cleanup, because StrictMode runs this effect twice in development and the
+    // second run skips the work — cancelling would leave the page turning "Checking your invitation…"
+    // forever. The redeemed guard keeps the redemption itself to a single call.
+    apiPost('/auth/verify-invitation', { token })
+      .then(async ({ data }) => {
         await adoptSession(data.tokens);
-        if (alive) setPhase('set-password');
-      } catch (error) {
-        if (!alive) return;
+        setPhase('set-password');
+      })
+      .catch((error) => {
         redeemed.current = '';
         setPhase('invalid-token');
         setMessage(error.message);
-      }
-    })();
-    return () => { alive = false; };
+      });
   }, [token, adoptSession]);
 
   const useManualToken = (e) => {

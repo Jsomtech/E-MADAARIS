@@ -21,24 +21,19 @@ export default function ConfirmEmail() {
 
   useEffect(() => {
     if (!token || attempted.current === token) return;
-    let alive = true;
     attempted.current = token;
     setPhase('confirming');
     setMessage(null);
-    (async () => {
-      try {
-        const { data } = await apiPost('/auth/confirm-email', { token });
-        if (!alive) return;
-        setResult(data);
-        setPhase('confirmed');
-      } catch (error) {
-        if (!alive) return;
+    // The request is deliberately not cancelled on cleanup. StrictMode runs this effect twice in
+    // development and the second run skips the work, so a cancelled first request would leave the
+    // spinner turning forever. Confirming an address is idempotent, so letting it settle is safe.
+    apiPost('/auth/confirm-email', { token })
+      .then(({ data }) => { setResult(data); setPhase('confirmed'); })
+      .catch((error) => {
         attempted.current = '';
         setMessage(error.message);
         setPhase('invalid-token');
-      }
-    })();
-    return () => { alive = false; };
+      });
   }, [token]);
 
   const useManualToken = (e) => {

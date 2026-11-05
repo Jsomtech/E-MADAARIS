@@ -30,24 +30,22 @@ export default function ResetPassword() {
   /* Step 1 — trade the code for a live session. */
   useEffect(() => {
     if (!code || exchanged.current === code) return;
-    let alive = true;
     exchanged.current = code;
     setPhase('exchanging');
     setMessage(null);
-    (async () => {
-      try {
-        const { data } = await apiPost('/auth/exchange-code', { code });
-        if (!alive) return;
+    // Not cancelled on cleanup: StrictMode runs this effect twice in development and the second run
+    // skips the work, so cancelling the first request would leave "Exchanging…" turning forever. The
+    // exchanged guard still keeps the code to a single redemption attempt.
+    apiPost('/auth/exchange-code', { code })
+      .then(async ({ data }) => {
         await adoptSession(data.tokens);
-        if (alive) setPhase('set-password');
-      } catch (error) {
-        if (!alive) return;
+        setPhase('set-password');
+      })
+      .catch((error) => {
         exchanged.current = '';
         setPhase('invalid-code');
         setMessage(error.message);
-      }
-    })();
-    return () => { alive = false; };
+      });
   }, [code, adoptSession]);
 
   const useManualCode = (e) => {
