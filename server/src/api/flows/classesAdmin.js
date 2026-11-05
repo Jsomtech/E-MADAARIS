@@ -7,7 +7,6 @@ import { audit } from '../../services/audit.js';
 import { recordDeletion } from '../../services/trash.js';
 import { checkEntitlement } from '../../services/entitlement.js';
 import { classesExtraColumns } from '../../services/schemaSupport.js';
-import { ensureStandardGrades } from '../../services/standardGrades.js';
 import { sanitizeSearch } from '../../core/crud.js';
 
 /**
@@ -252,38 +251,6 @@ classAdminRouter.post('/', requirePermission('students.create'), async (req, res
         teacher_name: teacher?.full_name || null,
         sections: createdSections,
         student_count: 0,
-      },
-    });
-  } catch (e) { next(e); }
-});
-
-/* ── Standard grades for a fresh school ───────────────────────── */
-// Idempotent: only builds Grade 1–8 / Form 1–4 when the school has no classes yet.
-classAdminRouter.post('/standard', requirePermission('students.create', 'school.edit'), async (req, res, next) => {
-  try {
-    const ent = await checkEntitlement(req.auth, 'classes.subjects');
-    if (!ent.ok) throw new ApiError(ent.status, ent.error);
-
-    const supabase = requireDb();
-    const schoolId = req.auth.schoolId;
-    const { data: school, error: schoolError } = await supabase.from('schools')
-      .select('school_type').eq('id', schoolId).maybeSingle();
-    if (schoolError) throw new ApiError(500, schoolError.message);
-
-    const result = await ensureStandardGrades(supabase, schoolId, school?.school_type);
-    if (result.created) {
-      await audit(req, {
-        module: 'classes', action: 'created',
-        summary: `${result.created} standard grade classes created automatically`,
-        metadata: { classes: result.classes.map((c) => c.name) },
-      });
-    }
-
-    res.status(result.created ? 201 : 200).json({
-      data: {
-        created: result.created,
-        classes: result.classes,
-        already_set_up: result.alreadySetUp,
       },
     });
   } catch (e) { next(e); }

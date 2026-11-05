@@ -3,7 +3,6 @@ import { DEFAULT_ROLE_PERMISSIONS, ROLE_NAMES } from '../config/roleDefaults.js'
 import { sendMail } from './mailer.js';
 import { setIssuedCredential } from './credentialVault.js';
 import { reclaimIdentity, temporaryPassword } from './authIdentity.js';
-import { ensureStandardGrades } from './standardGrades.js';
 import { env } from '../config/env.js';
 
 // Unambiguous alphabet (no 0/O, 1/I) so the printed reference stays easy to read.
@@ -56,10 +55,8 @@ export async function provisionSchool({ registration, adminUser }, { actor } = {
   }
   if (e1) throw Object.assign(new Error(`School creation failed: ${e1.message}`), { status: 500 });
 
-  // Grade classes are convenience data; a failure here must not block the tenant.
-  try {
-    await ensureStandardGrades(supabase, school.id, school.school_type);
-  } catch { /* the school can create classes later */ }
+  // Nothing else is created for the tenant. Classes, grades, subjects and fee structures are the
+  // school's own to build; a new school starts empty so it never has to delete someone else's setup.
 
   // Settings row
   await supabase.from('school_settings').insert({

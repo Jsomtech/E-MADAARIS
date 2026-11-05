@@ -5,13 +5,14 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
 import {
   AlertTriangle, BadgeCheck, ClipboardList, Copy, Download, FileSpreadsheet, Hash, ImagePlus,
-  KeyRound, Loader2, Lock, Percent, RefreshCw, ShieldCheck, Upload, UploadCloud, UserRound, Users,
+  KeyRound, Loader2, Lock, Percent, Plus, RefreshCw, ShieldCheck, Upload, UploadCloud, UserRound, Users,
 } from 'lucide-react';
 import { apiPatch, apiPost, apiUpload, downloadFile } from '../../api/client.js';
 import { useApi } from '../../hooks/useApi.js';
 import Field from '../../components/ui/Field.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
 import { Spinner } from '../../components/ui/Basics.jsx';
+import ClassFormModal from '../modules/ClassFormModal.jsx';
 
 const EMPTY = {
   full_name: '', hemis_id: '', gender: '', date_of_birth: '', phone: '', address: '',
@@ -40,8 +41,7 @@ export default function StudentFormModal({
 }) {
   const { t } = useTranslation();
   const isEdit = Boolean(student?.id);
-  const gradeSetupTried = useRef(false);
-  const [gradeSetup, setGradeSetup] = useState('idle');
+  const [classFormOpen, setClassFormOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
@@ -92,6 +92,7 @@ export default function StudentFormModal({
     setSuccess(null);
     setCopied(false);
     setPhotoError('');
+    setClassFormOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, student]);
 
@@ -99,31 +100,6 @@ export default function StudentFormModal({
     if (!open || isEdit || !defaultYearId) return;
     setForm((prev) => (prev.academic_year_id ? prev : { ...prev, academic_year_id: defaultYearId }));
   }, [open, isEdit, defaultYearId]);
-
-  // A school with no classes cannot register or assign anyone, so the standard ladder is
-  // prepared once per dialog when the parent confirms the list is empty (not still loading).
-  useEffect(() => {
-    if (!open) {
-      gradeSetupTried.current = false;
-      setGradeSetup('idle');
-      return;
-    }
-    if (isEdit || classesLoading || classes.length || gradeSetupTried.current) return;
-    gradeSetupTried.current = true;
-    setGradeSetup('working');
-    apiPost('/school/classes/standard', {})
-      .then(({ data }) => {
-        setGradeSetup('done');
-        if (data?.created) {
-          toast.success(t('sections.standardGradesCreated', {
-            defaultValue: '{{count}} standard grade classes were created automatically.',
-            count: data.created,
-          }));
-        }
-        onClassesChanged?.();
-      })
-      .catch(() => setGradeSetup('error'));
-  }, [open, isEdit, classesLoading, classes.length, onClassesChanged, t]);
 
   const set = (name) => (value) => setForm((prev) => ({ ...prev, [name]: value }));
 
@@ -302,7 +278,9 @@ export default function StudentFormModal({
       subtitle={isEdit
         ? t('sections.editStudentSubtitle', { defaultValue: '{{id}} · update the record without changing the login.', id: student?.admission_number || '' })
         : t('sections.newStudentSubtitle', { defaultValue: 'Student ID and first password are generated automatically.' })}
-      icon={UserRound} onClose={onClose} footer={success ? successFooter : formFooter}>
+      // Both modals watch window keydown for Escape, so the student form stays put while the
+      // class dialog it opened is still on screen.
+      icon={UserRound} onClose={() => { if (!classFormOpen) onClose?.(); }} footer={success ? successFooter : formFooter}>
       {schema.loading && !schema.data && <Spinner label={t('common.loading')} />}
 
       {!schema.loading && schema.data && !profileFields && (
@@ -465,16 +443,20 @@ export default function StudentFormModal({
                 name: 'class_id', type: 'select', required: true, col: 6,
                 label: t('sections.gradeClass', { defaultValue: 'Grade / Class' }),
                 options: classOptions,
-                placeholder: classesLoading || gradeSetup === 'working'
-                  ? t('sections.preparingGrades', { defaultValue: 'Preparing grades…' })
+                placeholder: classesLoading
+                  ? t('sections.loadingClasses', { defaultValue: 'Loading your classes…' })
                   : t('sections.pickClass', { defaultValue: 'Select class' }),
-                help: gradeSetup === 'working'
-                  ? t('sections.standardGradesWorking', { defaultValue: 'Creating the standard grade classes automatically…' })
-                  : gradeSetup === 'error'
-                    ? t('sections.standardGradesFailed', { defaultValue: 'Could not create standard grades automatically — add classes from Class Management.' })
-                    : gradeSetup === 'done' && !classOptions.length
-                      ? t('sections.standardGradesDone', { defaultValue: 'Standard grades are ready — choose one.' })
-                      : undefined,
+                help: (
+                  <span className="d-inline-flex align-items-center flex-wrap gap-2">
+                    {!classesLoading && !classOptions.length && (
+                      <span>{t('sections.noClassesYet', { defaultValue: 'Your school has no classes yet — create the first one.' })}</span>
+                    )}
+                    <button type="button" className="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1"
+                      onClick={() => setClassFormOpen(true)}>
+                      <Plus size={13} /> {t('sections.createClass', { defaultValue: 'Create class' })}
+                    </button>
+                  </span>
+                ),
               }} value={form.class_id} error={errors.class_id}
                 onChange={(v) => setForm((prev) => ({ ...prev, class_id: v, section_id: '' }))} />
               <Field field={{ name: 'section_id', type: 'select', col: 6, label: t('sections.section', { defaultValue: 'Section' }), options: sectionOptions, placeholder: form.class_id ? t('sections.pickSection', { defaultValue: 'Pick a section' }) : t('sections.pickClassFirst', { defaultValue: 'choose a class first' }) }}
@@ -534,6 +516,16 @@ export default function StudentFormModal({
           </section>
         </>
       )}
+
+      <ClassFormModal
+        open={classFormOpen}
+        onClose={() => setClassFormOpen(false)}
+        capabilities={{ teacher: false }}
+        onSaved={(cls) => {
+          setForm((prev) => ({ ...prev, class_id: cls.id, section_id: '' }));
+          onClassesChanged?.();
+        }}
+      />
     </Modal>
   );
 }
