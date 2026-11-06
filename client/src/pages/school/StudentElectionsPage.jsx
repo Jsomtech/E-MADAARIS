@@ -231,7 +231,7 @@ export default function StudentElectionsPage() {
         </div>
       )}
 
-      {!onVoterList && (
+      {!onVoterList && !hasVoted && (
         <div className="alert alert-warning small d-flex gap-2 align-items-start">
           <Ban size={16} className="flex-shrink-0 mt-1" />
           <div>
