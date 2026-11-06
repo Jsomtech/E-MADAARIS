@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { env } from '../config/env.js';
+import { setIssuedCredential } from '../services/credentialVault.js';
 
 /**
  * Creates (or repairs) the first Super Admin account.
@@ -37,7 +38,10 @@ async function findAuthUserByEmail(target) {
 const existing = await findAuthUserByEmail(email);
 let authUserId = existing?.id;
 if (authUserId) {
-  await admin.auth.admin.updateUserById(authUserId, { email_confirm: true, password });
+  // The operator typed this password themselves, so it is no longer a temporary handout.
+  await admin.auth.admin.updateUserById(authUserId, {
+    email_confirm: true, password, app_metadata: { must_change_password: false },
+  });
   console.log(`Auth user already exists (${email}) — email confirmed and password updated.`);
 } else {
   const { data: created, error } = await admin.auth.admin.createUser({
@@ -67,6 +71,14 @@ const { data: pu, error: puError } = await admin.from('platform_users').upsert({
   auth_user_id: authUserId, email, full_name: fullName, status: 'active', phone: null,
 }, { onConflict: 'auth_user_id' }).select('id, email').single();
 if (puError) { console.error('Failed to write platform_users:', puError.message); process.exit(1); }
+
+// Keep the vault honest: without this, the console would go on revealing the previous password.
+try {
+  await setIssuedCredential(authUserId, { membershipId: pu.id, password });
+  console.log('A recoverable copy is sealed in the credential vault — Account → Show my current password.');
+} catch (e) {
+  console.warn('The password was set but could not be sealed, so it cannot be read back later:', e.message);
+}
 
 const { error: linkError } = await admin.from('platform_user_roles')
   .upsert({ user_id: pu.id, role_id: role.id }, { onConflict: 'user_id,role_id' });

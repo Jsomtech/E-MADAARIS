@@ -54,7 +54,13 @@ npm run db:seed -w server
 ```
 
 The script is idempotent: it creates (or reuses) the GoTrue user, links a `platform_users` row and
-assigns the `super_admin` platform role. It never stores a plaintext password.
+assigns the `super_admin` platform role. It never writes a plaintext password — the value you put in
+`.env` is sealed into the credential vault (§5.1) so it can be read back from the console later, and
+the password itself is never printed.
+
+That makes this the way out of a locked console: set a password in `.env` that only you know, run
+`npm run db:seed -w server`, sign in. Nothing secret has to pass through a chat log or a terminal
+scrollback to get the account back.
 
 ### 1.3 Run
 
