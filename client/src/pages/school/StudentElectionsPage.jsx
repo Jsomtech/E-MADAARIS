@@ -19,7 +19,7 @@ import { useApi } from '../../hooks/useApi.js';
 import {
   Badge, EmptyState, ErrorState, PageHeader, Spinner, dateTime,
 } from '../../components/ui/Basics.jsx';
-import { BarView, ChartCard } from '../../components/ui/Charts.jsx';
+import ResultsBoard from '../../components/elections/ResultsBoard.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
 
 const ENDED_MESSAGE = 'Voting has officially ended. The election submission period is now closed. You can view the election results.';
@@ -330,42 +330,14 @@ export default function StudentElectionsPage() {
       )}
 
       {data.rankings_visible && results.length > 0 && (
-        <>
-          {results.map((position) => (
-            <ChartCard
-              key={position.position_id}
-              title={`${position.position_name} — ${t('elections.liveTally', { defaultValue: 'votes' })}`}
-              subtitle={t('elections.percentFormula', { defaultValue: 'Percentage is candidate votes divided by the valid votes for this seat.' })}
-            >
-              <BarView
-                labels={position.candidates.map((c) => c.full_name)}
-                datasets={[{ label: t('elections.votes', { defaultValue: 'Votes' }), data: position.candidates.map((c) => c.votes) }]}
-              />
-              <div className="mt-2">
-                {position.candidates.map((c) => (
-                  <div key={c.candidate_id} className="d-flex justify-content-between align-items-center small py-1 border-bottom">
-                    <span className="fw-semibold">{c.full_name}</span>
-                    <span className="d-flex align-items-center gap-2">
-                      <span className="tabular-nums">{c.votes}</span>
-                      <span className="tabular-nums text-muted">{c.percentage}%</span>
-                      {c.status === 'tied' && <Badge tone="warn">{t('elections.tied', { defaultValue: 'TIED' })}</Badge>}
-                      {c.status === 'winner' && <Badge tone="ok">{t('elections.leading', { defaultValue: 'leading' })}</Badge>}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </ChartCard>
-          ))}
-          <div className="card-soft p-3 mb-3 small text-muted d-flex align-items-center gap-2">
-            <Users size={14} />
-            {t('elections.turnoutLine', {
-              defaultValue: '{{voted}} of {{eligible}} eligible learners have voted ({{pct}}%).',
-              voted: data.turnout?.voted ?? 0,
-              eligible: data.turnout?.eligible ?? 0,
-              pct: data.turnout?.percentage ?? 0,
-            })}
-          </div>
-        </>
+        <ResultsBoard
+          seats={results}
+          turnout={data.turnout}
+          live={election.status === 'active'}
+          subtitle={t('elections.percentFormula', { defaultValue: 'Percentage is candidate votes divided by the valid votes for this seat.' })}
+          onPick={(row, seat) => setProfile({ row: candidates.find((c) => c.id === row.candidate_id) || row, position: seat })}
+          t={t}
+        />
       )}
 
       {!data.rankings_visible && !ended && (

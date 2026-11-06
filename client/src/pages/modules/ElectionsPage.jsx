@@ -21,6 +21,7 @@ import {
   Badge, EmptyState, ErrorState, PageHeader, Spinner, StatCard, StatusBadge, dateTime,
 } from '../../components/ui/Basics.jsx';
 import { BarView, ChartCard, DoughnutView } from '../../components/ui/Charts.jsx';
+import ResultsBoard from '../../components/elections/ResultsBoard.jsx';
 import { Modal, ConfirmDialog } from '../../components/ui/Modal.jsx';
 
 const ELECTION_FILE = 'supabase/migrations/0022_elections.sql';
@@ -985,38 +986,27 @@ function LiveTab({ scoreboard, turnout, election, loading, t }) {
           {t('elections.liveOffForStudents', { defaultValue: 'You can see these live counts. Learners will only see them if you allow live results, or after voting closes.' })}
         </div>
       )}
+      <ResultsBoard seats={scoreboard} turnout={turnout} live={election.status === 'active'}
+        subtitle={t('elections.percentFormula', { defaultValue: 'Percentage is candidate votes divided by the valid votes for this seat.' })}
+        t={t} />
+
       <div className="row g-3">
-        {scoreboard.map((position) => (
-          <div className="col-12 col-xl-6" key={position.position_id}>
-            <ChartCard title={t('elections.votesBar', { defaultValue: 'Votes' })} subtitle={position.position_name}>
-              <BarView labels={position.candidates.map((c) => c.full_name)}
-                datasets={[{ label: t('elections.votes', { defaultValue: 'Votes' }), data: position.candidates.map((c) => c.votes) }]} />
-            </ChartCard>
-          </div>
-        ))}
-        {scoreboard.map((position) => (
-          <div className="col-12 col-xl-6" key={`share-${position.position_id}`}>
-            <ChartCard title={t('elections.shareDonut', { defaultValue: 'Share of valid votes' })} subtitle={position.position_name}>
-              <DoughnutView labels={position.candidates.map((c) => c.full_name)} data={position.candidates.map((c) => c.votes)} />
-            </ChartCard>
-          </div>
-        ))}
         <div className="col-12 col-xl-6">
           <ChartCard title={t('elections.participationChart', { defaultValue: 'Participation' })}
             subtitle={`${turnout.voted ?? 0} / ${turnout.eligible ?? 0}`}>
             <DoughnutView labels={[t('elections.voted', { defaultValue: 'Voted' }), t('elections.notVoted', { defaultValue: 'Not voted' })]}
-              data={[turnout.voted ?? 0, turnout.not_voted ?? 0]} />
+              data={[turnout.voted ?? 0, turnout.not_voted ?? 0]} height={210} />
           </ChartCard>
         </div>
         <div className="col-12 col-xl-6">
           <ChartCard title={t('elections.positionCompare', { defaultValue: 'Valid votes per seat' })}>
-            <BarView labels={scoreboard.map((p) => p.position_name)}
+            <BarView labels={scoreboard.map((p) => p.position_name)} height={210}
               datasets={[{ label: t('elections.votes', { defaultValue: 'Votes' }), data: scoreboard.map((p) => p.total_valid_votes), backgroundColor: '#4c1fe0' }]} />
           </ChartCard>
         </div>
         <div className="col-12 col-xl-6">
           <ChartCard title={t('elections.classTurnout', { defaultValue: 'Turnout by class' })}>
-            <BarView labels={(turnout.by_class || []).map((row) => row.name || '—')}
+            <BarView labels={(turnout.by_class || []).map((row) => row.name || '—')} height={210}
               datasets={[
                 { label: t('elections.eligible', { defaultValue: 'Eligible' }), data: (turnout.by_class || []).map((row) => row.eligible), backgroundColor: '#64748b' },
                 { label: t('elections.voted', { defaultValue: 'Voted' }), data: (turnout.by_class || []).map((row) => row.voted), backgroundColor: '#22c55e' },
@@ -1025,7 +1015,7 @@ function LiveTab({ scoreboard, turnout, election, loading, t }) {
         </div>
         <div className="col-12 col-xl-6">
           <ChartCard title={t('elections.genderTurnout', { defaultValue: 'Turnout by gender' })}>
-            <DoughnutView labels={(turnout.by_gender || []).map((row) => row.group || '—')} data={(turnout.by_gender || []).map((row) => row.voted)} />
+            <DoughnutView labels={(turnout.by_gender || []).map((row) => row.group || '—')} data={(turnout.by_gender || []).map((row) => row.voted)} height={210} />
           </ChartCard>
         </div>
       </div>
