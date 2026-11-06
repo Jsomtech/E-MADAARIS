@@ -17,6 +17,9 @@ client/.env.*
 *.log
 server.err
 
+# Vercel link + pulled env (project id, org id — not secrets, but per-machine)
+.vercel
+
 # Firebase server credentials — the sender reads the file path from .env, the file never belongs in git
 serviceAccount*.json
 *service-account*.json
@@ -29,3 +32,6 @@ server/*.tmp.mjs
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+.vercel
+.env*

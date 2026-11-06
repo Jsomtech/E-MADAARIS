@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { createPrivateKey, createSign } from 'node:crypto';
-import { db } from '../config/supabase.js';
 import { env } from '../config/env.js';
 
 /**
@@ -8,19 +7,15 @@ import { env } from '../config/env.js';
  *
  * Google's own SDK does exactly two things on the server: trade a signed service-account JWT for an
  * OAuth access token, then POST one message per device. Doing those two calls here keeps the
- * dependency tree unchanged, so the only push secret in the deployment is the JSON file the operator
- * points at with FIREBASE_SERVICE_ACCOUNT_PATH. That file is read when a message is actually sent and
- * its contents never leave this module — nothing here logs a key, and the reasons reported outward
- * only ever name the configuration, never its value.
+ * dependency tree unchanged, so the only push secret in the deployment is the service account itself —
+ * either the file its path points at, or the same JSON held inline in FIREBASE_SERVICE_ACCOUNT_JSON for
+ * hosts without a filesystem. It is consulted when a message is actually sent and its contents never
+ * leave this module: nothing here logs a key, and the reasons reported outward only ever name the
+ * configuration, never its value.
  */
 
 const TOKEN_URI = 'https://oauth2.googleapis.com/token';
 const MESSAGING_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
-const SEND_CONCURRENCY = 12;
-const LOG_BATCH = 200;
-// One event must never turn into thousands of HTTPS calls on the request's behalf.
-const MAX_DEVICES_PER_SEND = 500;
-const TOKEN_CHUNK = 100;
 /** FCM tokens go in the last path segment of the message URL, so anything else is rejected. */
 const TOKEN_SHAPE = /^[A-Za-z0-9_\-.:]+$/;
 
@@ -31,17 +26,21 @@ let tokenRequest = null;
 
 function loadCredentials() {
   if (credentials) return credentials;
-  if (!env.firebaseServiceAccountPath) {
-    blockedReason = 'FIREBASE_SERVICE_ACCOUNT_PATH is not set — add it to .env';
+  if (!env.firebaseServiceAccountJson && !env.firebaseServiceAccountPath) {
+    blockedReason = 'no Firebase credentials — set FIREBASE_SERVICE_ACCOUNT_JSON, or FIREBASE_SERVICE_ACCOUNT_PATH';
     return null;
   }
   let raw;
-  try {
-    raw = readFileSync(env.firebaseServiceAccountPath, 'utf8');
-  } catch {
-    // Deliberately vague: the path itself may be meaningful to the deployment.
-    blockedReason = 'the service-account file could not be read — check the path in .env';
-    return null;
+  if (env.firebaseServiceAccountJson) {
+    raw = env.firebaseServiceAccountJson;
+  } else {
+    try {
+      raw = readFileSync(env.firebaseServiceAccountPath, 'utf8');
+    } catch {
+      // Deliberately vague: the path itself may be meaningful to the deployment.
+      blockedReason = 'the service-account file could not be read — check the path in .env';
+      return null;
+    }
   }
   let parsed;
   try {
@@ -175,116 +174,26 @@ async function sendOne(bearer, token, payload) {
   }
 }
 
-/**
- * Delivery history is written after the attempt, never before: a log that promised a send the provider
- * never saw would mislead whoever reads the analytics screen. A history write cannot break a delivery,
- * so its own failure is swallowed rather than turned into a failed message.
- */
-async function logDelivery(rows) {
-  if (!rows.length) return;
-  for (let i = 0; i < rows.length; i += LOG_BATCH) {
-    try {
-      await db().from('notification_delivery_logs').insert(rows.slice(i, i + LOG_BATCH));
-    } catch { /* the message itself already reached the inbox */ }
-  }
-}
-
-/** Results stay in input order so a failure can be traced back to the device that reported it. */
-async function pool(items, limit, worker) {
-  const out = new Array(items.length);
-  let cursor = 0;
-  const lanes = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    for (;;) {
-      const index = cursor++;
-      if (index >= items.length) return;
-      out[index] = await worker(items[index]);
-    }
-  });
-  await Promise.all(lanes);
-  return out;
+/** Whether a stored registration is still addressable by this transport. */
+export function isFcmToken(token) {
+  return Boolean(token) && TOKEN_SHAPE.test(token);
 }
 
 /**
- * Send one notification to every device registered by these accounts.
- * Returns a summary rather than throwing: a push outage must never roll back the school event that
- * caused it. `unregistered` tokens are dropped so a signed-out browser stops being retried.
+ * Deliver to one FCM registration. Everything above the single device — who receives what, how the
+ * attempt is logged, which dead devices get retired — belongs to services/pushDelivery.js, because the
+ * same message may go out over two transports in one fan-out.
  */
-export async function sendPushToUsers(userIds, {
-  scope = 'school', title, body = '', link = '/', tag = 'general', icon,
-  priority = 'normal', batchId = null, notificationIds = null,
-} = {}) {
-  const ids = [...new Set((userIds || []).filter(Boolean))];
-  if (!ids.length) return { attempted: 0, sent: 0, failed: 0, skipped: null, error: null };
-  if (!pushSenderStatus().ready) {
-    return { attempted: ids.length, sent: 0, failed: 0, skipped: 'sender_not_configured', error: blockedReason };
-  }
-
-  // The device row is read with the token so a delivery can be attributed to a person and a machine
-  // without ever storing the token outside push_tokens, where it already lives.
-  let devices = [];
-  try {
-    for (let i = 0; i < ids.length; i += TOKEN_CHUNK) {
-      const { data, error } = await db().from('push_tokens')
-        .select('id, user_id, school_id, token').eq('user_type', scope).in('user_id', ids.slice(i, i + TOKEN_CHUNK)).limit(TOKEN_CHUNK);
-      if (error) throw new Error(error.message);
-      devices.push(...(data || []));
-    }
-  } catch (error) {
-    return { attempted: ids.length, sent: 0, failed: 0, skipped: 'token_lookup_failed', error: error.message };
-  }
-
-  const seen = new Set();
-  devices = devices.filter((device) => {
-    if (!TOKEN_SHAPE.test(device.token) || seen.has(device.token)) return false;
-    seen.add(device.token);
-    return true;
-  }).slice(0, MAX_DEVICES_PER_SEND);
-  if (!devices.length) return { attempted: ids.length, sent: 0, failed: 0, skipped: 'no_registered_devices', error: null };
-
+export async function sendFcmToDevice(token, { title, body = '', link = '/', tag = 'general', icon, priority = 'normal' } = {}) {
+  if (!loadCredentials()) return { ok: false, stale: false, detail: 'SENDER_NOT_CONFIGURED' };
+  if (!isFcmToken(token)) return { ok: false, stale: true, detail: 'MALFORMED_TOKEN' };
   let bearer;
   try {
     bearer = await bearerToken();
   } catch (error) {
-    // A clock skew or a revoked key shows up here; keep the message in the in-app inbox.
-    await logDelivery(devices.map((device) => ({
-      school_id: device.school_id, batch_id: batchId,
-      notification_id: notificationIds?.get(device.user_id) || null,
-      recipient_user_id: device.user_id, recipient_scope: scope, channel: 'push',
-      device_id: device.id, delivery_status: 'skipped', provider_code: 'SENDER_CREDENTIALS_REJECTED',
-      error_message: error.message,
-    })));
-    return { attempted: devices.length, sent: 0, failed: devices.length, skipped: 'sender_credentials_rejected', error: error.message };
+    // A clock skew or a revoked key shows up here; the message stays in the in-app inbox either way.
+    return { ok: false, stale: false, detail: 'SENDER_CREDENTIALS_REJECTED', reason: error.message };
   }
-
-  const payload = buildMessage(null, { title, body, link, tag, icon, priority });
-  const results = await pool(devices, SEND_CONCURRENCY,
-    (device) => sendOne(bearer, device.token, { ...payload, message: { ...payload.message, token: device.token } }));
-  const sent = results.filter((r) => r.ok).length;
-  const dead = devices.filter((_, index) => results[index]?.stale);
-
-  await logDelivery(devices.map((device, index) => {
-    const result = results[index] || {};
-    return {
-      school_id: device.school_id, batch_id: batchId,
-      notification_id: notificationIds?.get(device.user_id) || null,
-      recipient_user_id: device.user_id, recipient_scope: scope, channel: 'push',
-      device_id: device.id,
-      delivery_status: result.ok ? 'sent' : 'failed',
-      provider_code: result.ok ? null : (result.detail || 'UNKNOWN'),
-      error_message: result.ok ? null : (result.reason || null),
-    };
-  }));
-
-  if (dead.length) {
-    await db().from('push_tokens').delete().in('token', dead.slice(0, TOKEN_CHUNK).map((d) => d.token)).then(
-      () => {}, () => { /* the next sign-in re-registers the device anyway */ },
-    );
-  }
-  return {
-    attempted: devices.length,
-    sent,
-    failed: devices.length - sent,
-    skipped: null,
-    error: results.find((r) => !r.ok && !r.stale)?.detail || null,
-  };
+  return sendOne(bearer, token, buildMessage(token, { title, body, link, tag, icon, priority }));
 }
+

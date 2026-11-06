@@ -28,6 +28,7 @@ import { clearanceRouter } from './api/flows/clearance.js';
 import { electionsRouter } from './api/flows/elections.js';
 import { platformElectionsRouter } from './api/flows/platformElections.js';
 import { accountRouter } from './api/push.routes.js';
+import { jobsRouter } from './api/jobs.routes.js';
 
 const V1 = '/api/v1';
 
@@ -56,6 +57,9 @@ export function createApp() {
   api.use('/auth', sessionLimiter);
   api.use(['/auth/login', '/auth/student-login'], credentialLimiter);
   api.use('/auth', authRouter);
+
+  // The schedulers, when the host keeps no process to run them in. No session, one bearer secret.
+  api.use('/jobs', jobsRouter);
 
   // Everything below needs a verified session; roles/school come from the database, never the client.
   const gated = express.Router();

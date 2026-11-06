@@ -1,0 +1,25 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "frontend": {
+      "root": "client",
+      "framework": "vite",
+      "rewrites": [
+        { "source": "/(.*)", "destination": "/index.html" }
+      ]
+    },
+    "backend": {
+      "root": "server",
+      "entrypoint": "api/index.js",
+      "installCommand": "npm install --omit=dev"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "backend" } },
+    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  ],
+  "crons": [
+    { "path": "/api/v1/jobs/tick", "schedule": "30 2 * * *" },
+    { "path": "/api/v1/jobs/backups", "schedule": "15 3 * * *" }
+  ]
+}
