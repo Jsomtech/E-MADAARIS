@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Activity, BellRing, Mail, Megaphone, RefreshCw, ShieldAlert, Smartphone, Users } from 'lucide-react';
+import { Activity, BellRing, Mail, Megaphone, RefreshCw, ShieldAlert, ShieldCheck, Smartphone, Users } from 'lucide-react';
 import { useApi } from '../../hooks/useApi.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import DataTable from '../../components/ui/DataTable.jsx';
@@ -272,6 +272,14 @@ function BatchCard({ batch, onClear }) {
         <div className="col-6 col-lg-3">
           <StatCard label={t('notifications.report.opened', { defaultValue: 'Already opened' })} value={b.read} icon={Activity} tone="ok" />
         </div>
+        {b.requires_ack && (
+          <div className="col-6 col-lg-3">
+            <StatCard label={t('notifications.report.acknowledged', { defaultValue: 'Acknowledged' })}
+              value={`${b.acknowledged ?? 0}/${b.recipients}`} icon={ShieldCheck}
+              tone={b.acknowledged === b.recipients ? 'ok' : 'warn'}
+              hint={t('notifications.report.ackHint', { defaultValue: 'Opened is not acknowledged — this send asked for a confirmation.' })} />
+          </div>
+        )}
         <div className="col-12 col-lg-6">
           <div className="small fw-semibold mb-1">{t('notifications.report.channelTally', { defaultValue: 'This send, per channel' })}</div>
           <div className="d-flex flex-wrap gap-1">

@@ -1,15 +1,17 @@
 /* E-MADAARIS service worker — the only script registered at scope '/'.
  *
  * It does two jobs, and they have to share one registration because a scope can hold only one worker:
- *   1. Firebase Cloud Messaging while the page is closed (src/services/push.js registers this file and
- *      passes the public web config in the query string, so nothing secret is stored here).
+ *   1. Push while the page is closed, over whichever transport this browser registered with: Firebase
+ *      Cloud Messaging (src/services/push.js registers this file and passes the public web config in the
+ *      query string, so nothing secret is stored here) or standards-based Web Push for the browsers
+ *      Apple limits to the Home Screen app.
  *   2. The offline app shell, so an installed app opens on a school's own pages without a network.
  *
  * What it never does is store data. Every /api call and every cross-origin request goes straight to the
  * network, untouched — a shared staff tablet must not be able to read another school's records out of a
  * cache, and third-party responses are not ours to keep. */
 
-const VERSION = 'emadaaris-v2';
+const VERSION = 'emadaaris-v3';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSETS_CACHE = `${VERSION}-assets`;
 
@@ -88,8 +90,11 @@ try {
 
 if (messaging) {
   messaging.onBackgroundMessage((payload) => {
-    const notification = payload.notification || {};
     const data = payload.data || {};
+    // Both transports deliver through this one registration, so each half of the worker handles only
+    // its own messages. Without the check a single notice can appear twice on the recipient's screen.
+    if (data.provider === 'webpush') return;
+    const notification = payload.notification || {};
     const title = notification.title || data.title || 'E-MADAARIS';
     self.registration.showNotification(title, {
       body: notification.body || data.body || '',
@@ -100,6 +105,52 @@ if (messaging) {
     });
   });
 }
+
+/**
+ * Standards-based Web Push — the transport for Safari on iPhone and iPad, where Firebase's browser
+ * channel does not run. The payload is the plain JSON services/webpush.js wrote, already decrypted by
+ * the browser, and it is the only thing that can produce a notification while the page is closed.
+ *
+ * `tag` is what keeps a repeat notice about the same thing to a single line on the lock screen, and
+ * `renotify` is what lets an urgent one make a sound again rather than landing silently.
+ */
+self.addEventListener('push', (event) => {
+  let message = null;
+  try {
+    message = event.data ? event.data.json() : null;
+  } catch {
+    message = null;
+  }
+  if (!message || message.provider !== 'webpush') return;
+  event.waitUntil((async () => {
+    await self.registration.showNotification(message.title || 'E-MADAARIS', {
+      body: message.body || '',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: message.tag || 'emadaaris',
+      renotify: Boolean(message.tag),
+      silent: message.priority === 'low',
+      timestamp: message.sent_at ? new Date(message.sent_at).getTime() : Date.now(),
+      data: { url: message.url || '/notifications' },
+    });
+    // The page is told so it can refresh the bell. It deliberately does not raise a second alert for
+    // this one — the notification that was just shown is the alert.
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clients) client.postMessage({ type: 'emadaaris:push-received' });
+  })());
+});
+
+/**
+ * A push service is allowed to retire a subscription at any time (an iOS reinstall, a reset Firefox
+ * Profile). The browser mints a replacement only if the page asks, so the signal is forwarded to any
+ * open client — and a device with no open page re-registers on the next sign-in.
+ */
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clients) client.postMessage({ type: 'emadaaris:push-subscription-changed' });
+  })());
+});
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

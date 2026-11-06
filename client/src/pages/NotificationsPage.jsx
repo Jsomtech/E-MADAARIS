@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Bell, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CheckCheck, Search, Send, Smartphone, SlidersHorizontal } from 'lucide-react';
 import { apiPost, apiPut } from '../api/client.js';
 import { useApi } from '../hooks/useApi.js';
@@ -63,6 +63,29 @@ export default function NotificationsPage() {
     refreshTimer.current = setTimeout(reload, 400);
   });
   useEffect(() => () => clearTimeout(refreshTimer.current), []);
+
+  // A tap on the phone's notification lands here as ?open=<id>. The row is opened and, since the person
+  // has now read it, marked read — for the recipient only, which is what the /read route already enforces.
+  // The address is then rewritten away so a reload does not reopen a message they have moved past.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [focusId, setFocusId] = useState(() => searchParams.get('open') || '');
+  useEffect(() => {
+    const id = searchParams.get('open');
+    if (id) setFocusId(id);
+  }, [searchParams]);
+  const handledFocus = useRef('');
+  useEffect(() => {
+    if (!focusId || handledFocus.current === focusId) return;
+    const target = items.find((n) => n.id === focusId);
+    if (!target) return;
+    handledFocus.current = focusId;
+    if (!target.is_read) apiPost(`/school/notifications/${focusId}/read`, {}).then(reload).catch(() => {});
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('open');
+      return next;
+    }, { replace: true });
+  }, [focusId, items, reload, setSearchParams]);
 
   const markAll = async () => {
     try {
@@ -174,7 +197,7 @@ export default function NotificationsPage() {
         <>
           <div className="card-soft">
             {items.map((n) => (
-              <NotificationRow key={n.id} item={n} onRead={reload}
+              <NotificationRow key={n.id} item={n} onRead={reload} focused={n.id === focusId}
                 label={t('notifications.markRead', { defaultValue: 'Mark read' })}
                 mayExport={can('notifications.export')} />
             ))}
@@ -202,9 +225,18 @@ export default function NotificationsPage() {
 }
 
 /** The list row stays short; the detail pane is what the whole row of the record actually says. */
-function NotificationRow({ item, onRead, label, mayExport }) {
+function NotificationRow({ item, onRead, label, mayExport, focused }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const rowRef = useRef(null);
+
+  // Arriving from the lock screen means the person wanted this message, so it shows itself and scrolls
+  // into the middle of the list rather than waiting for a second tap.
+  useEffect(() => {
+    if (!focused) return;
+    setOpen(true);
+    rowRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [focused]);
 
   const mark = async () => {
     if (item.is_read) return;
@@ -212,18 +244,37 @@ function NotificationRow({ item, onRead, label, mayExport }) {
     onRead();
   };
 
+  // Reading and acknowledging are different promises, so they are different writes: opening the row
+  // clears the bell, only the button below settles what the sender asked for.
+  const mayAcknowledge = item.ack_required && !item.acknowledged_at;
+  const acknowledge = async () => {
+    try {
+      await apiPost(`/school/notifications/${item.id}/ack`, {});
+      window.dispatchEvent(new Event('emadaaris:acks-changed'));
+      toast.success(t('notifications.ackSaved', { defaultValue: 'Your acknowledgment was recorded.' }));
+      onRead();
+    } catch (e) { toast.error(e.message); }
+  };
+
   const categoryLabel = t(`notifications.categories.${item.category}`, { defaultValue: humanize(item.category) });
   const body = String(item.body || '');
 
   return (
     <>
-      <div className="d-flex justify-content-between align-items-start gap-3 p-3 border-bottom">
+      <div ref={rowRef} className="d-flex justify-content-between align-items-start gap-3 p-3 border-bottom">
         <div className="min-width-0">
           <div className="d-flex align-items-center gap-2 flex-wrap">
             {item.link
               ? <Link to={item.link} className="fw-semibold small text-decoration-none" onClick={mark}>{item.title}</Link>
               : <span className="fw-semibold small">{item.title}</span>}
             {!item.is_read && <Badge tone="brand">new</Badge>}
+            {item.ack_required && (
+              <Badge tone={item.acknowledged_at ? 'ok' : 'danger'}>
+                {item.acknowledged_at
+                  ? t('notifications.ackDone', { defaultValue: 'acknowledged' })
+                  : t('notifications.ackNeeded', { defaultValue: 'needs your acknowledgment' })}
+              </Badge>
+            )}
             {item.priority && item.priority !== 'normal' && (
               <Badge tone={PRIORITY_TONE[item.priority] || 'neutral'}>
                 {t(`notifications.priorities.${item.priority}`, { defaultValue: humanize(item.priority) })}
@@ -234,6 +285,11 @@ function NotificationRow({ item, onRead, label, mayExport }) {
           <div className="small text-muted mt-1">{categoryLabel} · {dateTime(item.created_at)}</div>
         </div>
         <div className="d-flex align-items-center gap-1 flex-shrink-0">
+          {mayAcknowledge && (
+            <button type="button" className="btn btn-sm btn-primary" onClick={acknowledge}>
+              {t('notifications.acknowledge', { defaultValue: 'I have read and understood' })}
+            </button>
+          )}
           {!item.is_read && <button type="button" className="btn btn-sm btn-outline-secondary" onClick={mark}>{label}</button>}
           <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setOpen((v) => !v)}
             aria-expanded={open} aria-label={t('notifications.details', { defaultValue: 'Details' })}>
@@ -251,6 +307,13 @@ function NotificationRow({ item, onRead, label, mayExport }) {
             <span>{item.is_read
               ? t('notifications.alreadyRead', { defaultValue: 'Already read' })
               : t('notifications.stillUnread', { defaultValue: 'Still unread' })}</span>
+            {item.ack_required && (
+              <span className={item.acknowledged_at ? '' : 'fw-semibold'}>
+                {item.acknowledged_at
+                  ? `${t('notifications.acknowledgedAt', { defaultValue: 'Acknowledged' })}: ${dateTime(item.acknowledged_at)}`
+                  : t('notifications.awaitingAck', { defaultValue: 'The sender is waiting for your acknowledgment.' })}
+              </span>
+            )}
             {item.link && (
               <Link to={item.link} className="text-decoration-none" onClick={mark}>
                 {t('notifications.openRecord', { defaultValue: 'Open the record it refers to' })}
@@ -274,6 +337,8 @@ function NotificationRow({ item, onRead, label, mayExport }) {
  */
 function DeviceCard() {
   const { t } = useTranslation();
+  const { profile, can } = useAuth();
+  const maySendNotices = profile?.type === 'platform' || can('notifications.send');
   const [status, setStatus] = useState(null);
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
@@ -314,8 +379,17 @@ function DeviceCard() {
     if (!status) return t('common.loading');
     if (!status.ready) return status.reason;
     if (!status.devices) return t('notifications.senderReady', { defaultValue: 'The server can send pushes. This account has no browser registered yet.' });
+    // Which transport answers matters when something goes quiet: an iPhone is never on Firebase, and a
+    // desktop Chrome is never on plain Web Push while Firebase is registered.
+    const by = status.by_provider || {};
+    const transports = [
+      by.fcm ? t('notifications.viaFcm', { defaultValue: '{{count}} on Firebase', count: by.fcm }) : null,
+      by.webpush ? t('notifications.viaWebPush', { defaultValue: '{{count}} on Web Push (iPhone/iPad)', count: by.webpush }) : null,
+    ].filter(Boolean).join(' · ');
     return t('notifications.liveOnDevices', {
-      defaultValue: 'Push is live: the server is configured and this account has {{count}} browser(s) registered.', count: status.devices,
+      defaultValue: 'Push is live: the server is configured and this account has {{count}} browser(s) registered.{{transports}}',
+      count: status.devices,
+      transports: transports ? ` ${transports}.` : '',
     });
   };
 
@@ -327,12 +401,19 @@ function DeviceCard() {
       </div>
       <div className="small text-muted mb-3">{summary()}</div>
       <div className="d-flex align-items-center gap-2 flex-wrap">
-        <button type="button" className="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1"
-          onClick={sendTest} disabled={busy || !status?.ready}>
-          <Send size={14} /> {busy ? t('common.saving') : t('notifications.sendTest', { defaultValue: 'Send a test notification' })}
-        </button>
+        {maySendNotices && (
+          <button type="button" className="btn btn-sm btn-outline-primary d-inline-flex align-items-center gap-1"
+            onClick={sendTest} disabled={busy || !status?.ready}>
+            <Send size={14} /> {busy ? t('common.saving') : t('notifications.sendTest', { defaultValue: 'Send a test notification' })}
+          </button>
+        )}
         <Link to="/account" className="btn btn-sm btn-link text-decoration-none">{t('notifications.deviceSettings', { defaultValue: 'Turn push on for this browser' })}</Link>
       </div>
+      {!maySendNotices && (
+        <div className="small text-muted mt-2">
+          {t('notifications.sendingIsStaff', { defaultValue: 'Only school staff can send messages. This device still receives whatever the school sends you.' })}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { db } from '../config/supabase.js';
 import { env } from '../config/env.js';
-import { sendPushToUsers } from './fcm.js';
+import { sendPushToUsers } from './pushDelivery.js';
 import { sendMail } from './mailer.js';
+import { notificationAckColumns } from './schemaSupport.js';
 
 /**
  * The one way a school event becomes a message.
@@ -96,17 +97,18 @@ async function insertInbox(supabase, rows) {
 
 /**
  * @param {object} options schoolId, scope ('school'|'platform'), category, title, body, link, icon,
- *                         priority, batchId, channels (['in_app','push','email']),
+ *                         priority, batchId, channels (['in_app','push','email']), ackRequired (ask the
+ *                         recipient to explicitly confirm they read it — in-app channel only),
  *                         email (honour the per-category email preference, default true)
  * @returns {{ inserted, suppressed, truncated, batch, push: Promise, email: Promise }}
  */
 export async function notify(supabase, userIds, {
   schoolId = null, scope = 'school', category = 'general',
   title, body = null, link = null, icon = null, email = true,
-  priority = 'normal', batchId = null, channels = null,
+  priority = 'normal', batchId = null, channels = null, ackRequired = false,
 } = {}) {
   const ids = [...new Set((userIds || []).filter(Boolean))];
-  const summary = { inserted: 0, suppressed: 0, truncated: false, batch: batchId || randomUUID(), push: Promise.resolve(null), email: Promise.resolve(null) };
+  const summary = { inserted: 0, suppressed: 0, truncated: false, ack_required: false, batch: batchId || randomUUID(), push: Promise.resolve(null), email: Promise.resolve(null) };
   if (!ids.length || !title) return summary;
   const audience = ids.slice(0, MAX_AUDIENCE);
   summary.truncated = ids.length > MAX_AUDIENCE;
@@ -118,6 +120,10 @@ export async function notify(supabase, userIds, {
 
   let notificationIds = null;
   if (wants.has('in_app')) {
+    // An acknowledgment is a promise about a message that is actually in front of the person, so it
+    // rides on the inbox row only, and only on a database that has migration 0027.
+    const mayAck = ackRequired && await notificationAckColumns();
+    summary.ack_required = mayAck;
     const rows = prefs.allowed.map((recipient_user_id) => ({
       school_id: scope === 'school' ? schoolId : null,
       recipient_user_id,
@@ -129,6 +135,7 @@ export async function notify(supabase, userIds, {
       link,
       batch_id: summary.batch,
       is_read: false,
+      ...(mayAck ? { ack_required: true } : {}),
     }));
     // Reading the new ids back costs one response body per chunk and buys the join that analytics
     // needs: which device answered for which inbox row.
@@ -149,7 +156,8 @@ export async function notify(supabase, userIds, {
     : [];
   if (pushTo.length) {
     summary.push = sendPushToUsers(pushTo, {
-      scope, title, body: body || '', link: link || '/', tag: category, icon: icon || undefined,
+      scope, schoolId: scope === 'school' ? schoolId : null,
+      title, body: body || '', link: link || '/', tag: category, icon: icon || undefined,
       priority, batchId: summary.batch, notificationIds,
     }).catch((error) => ({ attempted: 0, sent: 0, failed: 0, skipped: 'push_threw', error: error.message }));
   }

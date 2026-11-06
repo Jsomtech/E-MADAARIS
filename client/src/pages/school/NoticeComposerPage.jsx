@@ -37,7 +37,7 @@ export default function NoticeComposerPage() {
 
   const [form, setForm] = useState({
     title: '', body: '', link: '', category: 'announcements', priority: 'normal',
-    channels: ['in_app', 'push'], audience: 'all', sendAt: '',
+    channels: ['in_app', 'push'], audience: 'all', sendAt: '', ackRequired: false,
   });
   const [classIds, setClassIds] = useState([]);
   const [roleNames, setRoleNames] = useState([]);
@@ -112,6 +112,7 @@ export default function NoticeComposerPage() {
     class_ids: form.audience === 'class' ? classIds : [],
     role_names: form.audience === 'roles' ? roleNames : [],
     user_ids: form.audience === 'users' ? people.map((p) => p.id) : [],
+    ack_required: form.ackRequired && form.channels.includes('in_app'),
     send_at: form.sendAt ? new Date(form.sendAt).toISOString() : undefined,
   };
   // The preview is the confirmation: it is only worth its number while nothing has changed since.
@@ -158,7 +159,7 @@ export default function NoticeComposerPage() {
     setBusy(true);
     try {
       const body = await apiPost('/school/notifications/send', payload);
-      setResult(body.data);
+      setResult({ ...body.data, ack_requested: payload.ack_required });
       setConfirmOpen(false);
       setPreview(null);
       setForm((prev) => ({ ...prev, title: '', body: '' }));
@@ -255,6 +256,20 @@ export default function NoticeComposerPage() {
                     </label>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <div className="form-check mt-3">
+              <input className="form-check-input" type="checkbox" id="notice-ack"
+                checked={form.ackRequired} disabled={!form.channels.includes('in_app')}
+                onChange={(e) => set('ackRequired')(e.target.checked)} />
+              <label className="form-check-label small" htmlFor="notice-ack">
+                {t('composer.requireAck', { defaultValue: 'Require each recipient to confirm they read it' })}
+              </label>
+              <div className="small text-muted mt-1">
+                {form.channels.includes('in_app')
+                  ? t('composer.requireAckHint', { defaultValue: 'The message is put in front of them again every time they sign in until they press Acknowledge. A phone showing the notification does not count — being told is not having read it.' })
+                  : t('composer.requireAckNeedsInbox', { defaultValue: 'Needs the inbox copy switched on: the confirmation is asked of the message in their list.' })}
               </div>
             </div>
 
@@ -385,6 +400,11 @@ export default function NoticeComposerPage() {
               {(payload.channels || []).map((c) => t(`composer.channels.${c}`, { defaultValue: humanize(c) })).join(' · ')}
               {payload.send_at ? ` · ${new Date(payload.send_at).toLocaleString()}` : ''}
             </div>
+            {payload.ack_required && (
+              <div className="small mt-1">
+                {t('composer.confirmAck', { defaultValue: 'Each recipient is asked to confirm they read it, every time they sign in, until they do.' })}
+              </div>
+            )}
             <div className="small text-muted mt-2">
               {payload.send_at
                 ? t('composer.confirmQueued', { defaultValue: 'Queued now, counted again when it is due.' })
@@ -612,6 +632,15 @@ function ResultCard({ result }) {
           : `${t('composer.pushNote', { defaultValue: 'Push' })}: ${push.sent ?? 0} sent, ${push.failed ?? 0} failed`}
         {push.pending ? ` — ${t('composer.pushPending', { defaultValue: 'still sending; the delivery log has the final counts' })}` : ''}
       </div>
+      {result.ack_requested && (result.ack_required ? (
+        <div className="small text-muted mt-1">
+          {t('composer.ackAsked', { defaultValue: 'Acknowledgment is required — the send report counts who has confirmed.' })}
+        </div>
+      ) : (
+        <div className="small text-warning mt-1">
+          {t('composer.ackUnavailable', { defaultValue: 'The notice went out, but no acknowledgment was attached: this database needs migration 0027.' })}
+        </div>
+      ))}
       <Link to={`/school/notification-report?batch=${result.batch_id}`} className="small">
         {t('composer.seeDelivery', { defaultValue: 'See who received it' })}
       </Link>

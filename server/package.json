@@ -10,7 +10,8 @@
     "start": "node src/server.js",
     "db:seed": "node src/scripts/bootstrapSuperAdmin.js",
     "db:migrate:print": "node src/scripts/printMigrations.js",
-    "db:sql:check": "node src/scripts/checkSql.js"
+    "db:sql:check": "node src/scripts/checkSql.js",
+    "push:vapid": "node src/scripts/generateVapidKeys.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.10",
@@ -24,6 +25,7 @@
     "pdfkit": "^0.16.0",
     "pino": "^9.6.0",
     "pino-http": "^10.4.0",
+    "web-push": "^3.6.7",
     "zod": "^3.24.1"
   },
   "devDependencies": {

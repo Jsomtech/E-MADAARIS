@@ -11,7 +11,11 @@ export function RequireAuth({ children }) {
   const { profile, loading } = useAuth();
   const location = useLocation();
   if (loading) return <div className="p-5"><Spinner label="Loading session" /></div>;
-  if (!profile) return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+  if (!profile) {
+    // The query string travels with the path: a notification tapped on a locked screen arrives as
+    // /notifications?open=<id>, and signing in has to land on that message rather than on the list.
+    return <Navigate to="/login" state={{ from: `${location.pathname}${location.search}` }} replace />;
+  }
   return children;
 }
 

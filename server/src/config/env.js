@@ -34,10 +34,25 @@ export const env = {
   // contents are read by services/fcm.js when a message is sent and never logged.
   firebaseServiceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH
     || process.env.GOOGLE_APPLICATION_CREDENTIALS || '',
+  // The same JSON inline. A serverless host has no readable file at cold start, so the credential has
+  // to travel as a value; services/fcm.js prefers this one and never logs either.
+  firebaseServiceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
   // Optional; the project id inside the service-account file is used when this is blank.
   firebaseProjectId: process.env.FIREBASE_PROJECT_ID || '',
+  // Standards-based Web Push (RFC 8291 + VAPID, RFC 8292). `npm run push:vapid -w server` mints a
+  // P-256 pair and writes it into the root .env; the public half is handed to browsers by the API, the
+  // private half signs assertions and never leaves this process.
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '',
+  vapidPrivateKey: process.env.VAPID_PRIVATE_KEY || '',
+  // Push services require contactable proof of who is sending. A mailto: of the operator's own address.
+  vapidSubject: process.env.VAPID_SUBJECT || '',
+  // How long a push may wait on the provider's side for a device that is offline, in seconds.
+  pushTtlSeconds: Number(process.env.PUSH_TTL_SECONDS || 3600),
   appBaseUrl: process.env.APP_BASE_URL || process.env.FRONTEND_URL || 'http://localhost:5173',
   backupIntervalMs: Number(process.env.BACKUP_INTERVAL_MS || 10000),
+  // Shared with the platform's scheduler. Vercel sends it as `Authorization: Bearer <CRON_SECRET>`
+  // automatically when the variable exists on the project; api/jobs.routes.js fails closed without it.
+  cronSecret: process.env.CRON_SECRET || '',
   get configured() {
     return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
   },

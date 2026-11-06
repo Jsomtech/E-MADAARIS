@@ -6,6 +6,7 @@ import { ApiError } from '../../middleware/error.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import { audit } from '../../services/audit.js';
 import { notify, userIdsWithRoles, NOTIFICATION_CATEGORIES } from '../../services/notify.js';
+import { notificationAckColumns } from '../../services/schemaSupport.js';
 import {
   AUDIENCE_CAP, AUDIENCES, BROADCAST_AUDIENCES, CHANNELS, PRIORITIES, assertMayCompose,
   describeAudience, mayAnnounce, ownsCategory, resolveAudience, scopedClassIds, taughtClassIds,
@@ -42,6 +43,7 @@ const sendSchema = z.object({
   class_ids: z.array(z.string().uuid()).max(60).default([]),
   role_names: z.array(z.string().trim().min(2).max(60)).max(12).default([]),
   user_ids: z.array(z.string().uuid()).max(500).default([]),
+  ack_required: z.boolean().default(false),
   send_at: z.coerce.date().optional(),
 }).superRefine((body, ctx) => {
   if (body.audience === 'class' && !body.class_ids.length) {
@@ -52,6 +54,12 @@ const sendSchema = z.object({
   }
   if (body.audience === 'users' && !body.user_ids.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['user_ids'], message: 'The individual audience needs at least one recipient.' });
+  }
+  if (body.ack_required && !body.channels.includes('in_app')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom, path: ['ack_required'],
+      message: 'An acknowledgment is asked of the message in the recipient\u2019s list, so that channel has to be on.',
+    });
   }
 });
 
@@ -95,7 +103,7 @@ function sendOptions(req, body, extra = {}) {
   return {
     schoolId: req.auth.schoolId, scope: 'school', category: body.category,
     title: body.title, body: body.body || null, link: body.link || '/notifications',
-    priority: body.priority, channels: body.channels, ...extra,
+    priority: body.priority, channels: body.channels, ackRequired: body.ack_required === true, ...extra,
   };
 }
 
@@ -224,7 +232,10 @@ notificationsOpsRouter.post('/send', requirePermission('notifications.send'), se
         title: body.title,
         body: body.body || null,
         link: body.link || '/notifications',
-        targeting: { audience: body.audience, class_ids: classIds, role_names: body.role_names, user_ids: body.user_ids },
+        targeting: {
+          audience: body.audience, class_ids: classIds, role_names: body.role_names,
+          user_ids: body.user_ids, ack_required: body.ack_required === true,
+        },
         channels: body.channels,
         scheduled_at: sendAt.toISOString(),
         status: 'pending',
@@ -269,6 +280,9 @@ notificationsOpsRouter.post('/send', requirePermission('notifications.send'), se
         delivered: summary.inserted,
         suppressed: summary.suppressed,
         truncated: summary.truncated,
+        // False here means the database has not run migration 0027: the message still went out, the
+        // promise to confirm it did not. Better reported than silently assumed.
+        ack_required: summary.ack_required,
         push: push || { pending: true, note: 'Still sending — the delivery log has the final counts.' },
         email: email || null,
       },
@@ -326,8 +340,9 @@ function tally(rows, keyOf) {
 notificationsOpsRouter.get('/batches/:batchId', requirePermission('notifications.export'), async (req, res, next) => {
   try {
     const supabase = requireDb();
+    const ackSchema = await notificationAckColumns();
     const { data: heads, error } = await supabase.from('notifications')
-      .select('id, recipient_user_id, category, priority, title, body, link, is_read, created_at')
+      .select(`id, recipient_user_id, category, priority, title, body, link, is_read, created_at${ackSchema ? ', ack_required, acknowledged_at' : ''}`)
       .eq('school_id', req.auth.schoolId).eq('batch_id', req.params.batchId).limit(1000);
     if (error) throw new ApiError(500, error.message);
     if (!heads?.length) throw new ApiError(404, 'No notification batch matches that id.');
@@ -344,6 +359,8 @@ notificationsOpsRouter.get('/batches/:batchId', requirePermission('notifications
         created_at: heads[0].created_at,
         recipients: heads.length,
         read: heads.filter((row) => row.is_read).length,
+        requires_ack: ackSchema ? heads.some((row) => row.ack_required) : false,
+        acknowledged: ackSchema ? heads.filter((row) => row.acknowledged_at).length : null,
         channels: tally(logs || [], (row) => `${row.channel}.${row.delivery_status}`),
         deliveries: logs || [],
       },

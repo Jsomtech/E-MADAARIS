@@ -7,7 +7,7 @@ import { requirePermission, requirePlatform } from '../../middleware/rbac.js';
 import { audit } from '../../services/audit.js';
 import { visibleStudentIds } from '../../services/scopes.js';
 import { alertUsers, userIdsWithRoles, NOTIFICATION_CATEGORIES } from '../../services/notify.js';
-import { notificationPushPreferenceColumn, notificationOpsReady } from '../../services/schemaSupport.js';
+import { notificationAckColumns, notificationPushPreferenceColumn, notificationOpsReady } from '../../services/schemaSupport.js';
 import { notificationsOpsRouter } from './notificationComposer.js';
 
 /**
@@ -101,6 +101,50 @@ notificationsRouter.post('/read-all', async (req, res, next) => {
       .eq('recipient_user_id', req.auth.userId).eq('is_read', false);
     if (error) throw new ApiError(500, error.message);
     res.json({ data: { ok: true } });
+  } catch (e) { next(e); }
+});
+
+/**
+ * What the sender asked to be acknowledged and this recipient has not confirmed. Sign-in asks this, so a
+ * mandatory notice cannot be settled by the phone showing it on the lock screen — being told is not
+ * having read it, and the school needs the difference on the record.
+ */
+notificationsRouter.get('/pending-acks', async (req, res, next) => {
+  try {
+    if (!await notificationAckColumns()) return res.json({ data: [], ready: false });
+    let query = requireDb().from('notifications')
+      .select('id, category, priority, title, body, link, created_at')
+      .eq('recipient_user_id', req.auth.userId)
+      .eq('recipient_scope', req.auth.type === 'platform' ? 'platform' : 'school')
+      .eq('ack_required', true).is('acknowledged_at', null)
+      .order('created_at', { ascending: true }).limit(20);
+    if (req.auth.type === 'school') query = query.eq('school_id', req.auth.schoolId);
+    const { data, error } = await query;
+    if (error) throw new ApiError(500, error.message);
+    res.json({ data: data || [], ready: true });
+  } catch (e) { next(e); }
+});
+
+/**
+ * One recipient's own acknowledgment of one message. It never touches anyone else's copy of the same
+ * send, and an already-acknowledged row answers 404 rather than pretending to have moved the clock.
+ */
+notificationsRouter.post('/:id/ack', async (req, res, next) => {
+  try {
+    // Same courtesy as the read above: a database that has not run 0027 answers clearly instead of
+    // failing on a column PostgREST has never heard of.
+    if (!await notificationAckColumns()) {
+      throw new ApiError(409, 'Acknowledgment is not available yet. Apply supabase/migrations/0027_notification_acks.sql.');
+    }
+    let query = requireDb().from('notifications')
+      .update({ acknowledged_at: new Date().toISOString(), is_read: true })
+      .eq('id', req.params.id).eq('recipient_user_id', req.auth.userId)
+      .eq('ack_required', true).is('acknowledged_at', null);
+    if (req.auth.type === 'school') query = query.eq('school_id', req.auth.schoolId);
+    const { data, error } = await query.select('id, acknowledged_at, is_read').maybeSingle();
+    if (error) throw new ApiError(500, error.message);
+    if (!data) throw new ApiError(404, 'Nothing on that message is waiting for your acknowledgment.');
+    res.json({ data });
   } catch (e) { next(e); }
 });
 

@@ -137,3 +137,19 @@ export async function notificationPushPreferenceColumn() {
   if (/could not find|does not exist|schema cache|unknown column/i.test(error.message || '')) return false;
   return true;
 }
+
+/**
+ * Migration 0027 adds the acknowledgment pair to notifications. An announcement that asks to be
+ * acknowledged still arrives whether or not the school has pasted the file — only the extra promise to
+ * confirm reading is dropped, because inventing a requirement the database cannot remember would be
+ * worse than not offering it.
+ */
+let ackColumns = null;
+
+export async function notificationAckColumns() {
+  if (ackColumns === true) return true;
+  const { error } = await requireDb().from('notifications').select('id, ack_required, acknowledged_at').limit(1);
+  if (!error) { ackColumns = true; return true; }
+  if (/could not find|does not exist|schema cache|unknown column/i.test(error.message || '')) return false;
+  return true;
+}

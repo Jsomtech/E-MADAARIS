@@ -14,6 +14,7 @@ import { useNotificationStream } from '../../hooks/useNotificationStream.js';
 import { humanize } from '../../config/resources.jsx';
 import BrandLogo from '../brand/BrandLogo.jsx';
 import { isRunningStandalone, promptInstall, watchInstallable, watchOnline } from '../../services/pwa.js';
+import AcknowledgmentGate from '../notifications/AcknowledgmentGate.jsx';
 
 function initials(name) {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
@@ -251,6 +252,23 @@ export default function RoleLayout() {
     return () => { alive = false; if (typeof unlisten === 'function') unlisten(); };
   }, [navigate]);
 
+  // The worker cannot mint a replacement subscription or refresh the page's own state on its own, so it
+  // talks through postMessage. Web Push has no foreground delivery path of its own — this is it.
+  useEffect(() => {
+    const onWorkerMessage = (event) => {
+      const type = event.data?.type;
+      if (type === 'emadaaris:push-received') {
+        window.dispatchEvent(new Event('emadaaris:push'));
+        return;
+      }
+      if (type === 'emadaaris:push-subscription-changed') {
+        import('../../services/push.js').then((service) => service.renewPushSubscription()).catch(() => {});
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message', onWorkerMessage);
+    return () => navigator.serviceWorker?.removeEventListener('message', onWorkerMessage);
+  }, []);
+
   const signOut = async () => { await logout(); navigate('/login'); };
   const toggleLang = () => i18n.changeLanguage(i18n.language === 'so' ? 'en' : 'so');
 
@@ -321,6 +339,7 @@ export default function RoleLayout() {
         </header>
         <main className="app-content">
           <Outlet />
+          <AcknowledgmentGate />
         </main>
       </div>
     </div>

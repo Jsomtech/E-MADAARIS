@@ -24,19 +24,25 @@ export default function AccountPage() {
     configured: null,
     missing: [],
     enabled: false,
+    provider: null,
     permission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
   });
 
   useEffect(() => {
     let alive = true;
     import('../services/push.js')
-      .then((service) => {
+      .then(async (service) => {
+        // Firebase is only half the answer: an iPhone is served by standards Web Push, which needs no
+        // client keys at all, only the VAPID pair on the server. So the card asks the server too.
+        const webpushReady = await service.getPushPublicKey().then((key) => Boolean(key?.ready)).catch(() => false);
         if (!alive) return;
         setPush((state) => ({
           ...state,
-          configured: service.isPushConfigured,
-          missing: service.missingPushConfig(),
-          enabled: Boolean(service.storedPushToken()),
+          configured: service.isPushConfigured || webpushReady,
+          missing: service.isPushConfigured ? [] : service.missingPushConfig(),
+          enabled: Boolean(service.pushProvider()),
+          provider: service.pushProvider(),
+          permission: service.notificationPermission(),
         }));
       })
       .catch(() => { if (alive) setPush((state) => ({ ...state, configured: false })); });
@@ -49,11 +55,17 @@ export default function AccountPage() {
       const service = await import('../services/push.js');
       if (push.enabled) {
         await service.disablePush();
-        setPush((state) => ({ ...state, busy: false, enabled: false }));
+        setPush((state) => ({ ...state, busy: false, enabled: false, provider: null }));
         toast.success(t('account.pushDisabled', { defaultValue: 'Push notifications turned off on this device' }));
       } else {
-        await service.enablePush();
-        setPush((state) => ({ ...state, busy: false, enabled: true, permission: 'granted' }));
+        const outcome = await service.enablePush();
+        setPush((state) => ({
+          ...state,
+          busy: false,
+          enabled: true,
+          provider: outcome?.provider || null,
+          permission: 'granted',
+        }));
         toast.success(t('account.pushEnabled', { defaultValue: 'Push notifications enabled on this device' }));
       }
     } catch (error) {
@@ -192,9 +204,14 @@ export default function AccountPage() {
                       ? t('account.pushOn', { defaultValue: 'Enabled on this device' })
                       : t('account.pushOff', { defaultValue: 'Not enabled' })}
                   </span>
+                  {push.provider === 'webpush' && (
+                    <span className="badge text-bg-light ms-1">
+                      {t('account.pushViaWebPush', { defaultValue: 'Web Push' })}
+                    </span>
+                  )}
                 </div>
                 <button type="button" className={`btn btn-sm ${push.enabled ? 'btn-outline-secondary' : 'btn-primary'} d-inline-flex align-items-center gap-1`}
-                  onClick={togglePush} disabled={push.busy || push.permission === 'unsupported'}>
+                  onClick={togglePush} disabled={push.busy || push.permission === 'unsupported' || push.permission === 'denied'}>
                   {push.enabled ? <BellOff size={14} /> : <Bell size={14} />}
                   {push.busy
                     ? '…'
@@ -207,10 +224,17 @@ export default function AccountPage() {
                     {t('account.pushBlocked', { defaultValue: 'Notifications are blocked for this site. Allow them in the browser settings, then try again.' })}
                   </div>
                 )}
+                {!push.enabled && push.permission !== 'denied' && (
+                  <div className="small text-muted mt-2">
+                    {t('account.pushIosHint', {
+                      defaultValue: 'On iPhone or iPad, add E-MADAARIS to the Home Screen first — a browser tab on iOS cannot receive notifications.',
+                    })}
+                  </div>
+                )}
               </>
             ) : (
               <div className="small text-muted">
-                {t('account.pushNotConfigured', { defaultValue: 'Firebase is not configured yet. Add the Firebase web keys to client/.env and restart the app.' })}
+                {t('account.pushNotConfigured', { defaultValue: 'No push sender is configured yet. Add the Firebase web keys to client/.env, or give the server a Web Push key with npm run push:vapid -w server, then restart.' })}
                 {push.missing.length ? <div className="mt-1"><code>{push.missing.join(', ')}</code></div> : null}
               </div>
             )}

@@ -143,6 +143,7 @@ async function deliverOne(supabase, row) {
       schoolId: claimed.school_id, scope: 'school', category: claimed.category,
       title: claimed.title, body: claimed.body, link: claimed.link,
       priority: claimed.priority, batchId: claimed.batch_id, channels: claimed.channels,
+      ackRequired: targeting.ack_required === true,
     });
     if (summary.error) throw new Error(summary.error);
     // Nobody is waiting on this response, so the push leg is finished before the row is closed.

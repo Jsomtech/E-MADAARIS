@@ -31,7 +31,9 @@ cp .env.example .env        # then fill in the Supabase values (see §2)
 
 Apply the SQL files **in sorted order** (the number prefix is the order):
 
-1. `supabase/migrations/0001_core_helpers.sql` … `0025_notification_ops.sql`
+1. `supabase/migrations/0001_core_helpers.sql` … `0027_notification_acks.sql` (0026 adds the Web Push
+   subscriptions and device lifecycle to `push_tokens`, 0027 adds acknowledgments; both alter existing
+   tables, so `0090_rls.sql` does not need re-running for them)
 2. `supabase/migrations/0090_rls.sql` — enables RLS and installs the tenant-isolation policies (run after all tables exist, and again after adding a migration that creates one)
 3. `supabase/seed.sql` — platform roles, permissions, subscription plans, reference data
 
@@ -93,11 +95,26 @@ All variables live in one repo-root `.env`; `server/src/config/env.js` loads it 
 | `PLATFORM_SUPPORT_EMAIL` | server | shown on support pages |
 | `SUPERADMIN_EMAIL`, `SUPERADMIN_PASSWORD`, `SUPERADMIN_NAME` | server script | used only by `db:seed` |
 | `FIREBASE_SERVICE_ACCOUNT_PATH`, `FIREBASE_PROJECT_ID` | server | push over FCM (see §8); the JSON itself stays out of the repo |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | server | the same JSON as one value, for hosts with no readable file (Vercel). Takes priority over the path — set one, not both |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | server | push over standards-based Web Push (§8.1b); mint both halves with `npm run push:vapid -w server` |
+| `PUSH_TTL_SECONDS` | server | optional; how long a push service may hold an undelivered message (default 3600) |
+| `CRON_SECRET` | server | only needed on a host without a persistent process: the bearer credential for `/api/v1/jobs/*` (§2.1) |
 | `VITE_FIREBASE_*`, `VITE_FIREBASE_VAPID_KEY` | client | public web-app config that lets a device register for push |
 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | client | optional; makes the inbox fill itself without push (see §8.2) |
 
 Without `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` the server still boots (so `/health` works) but
 every database-backed route returns a configuration error.
+
+### 2.1 Two ways to host the same API
+
+`npm run start -w server` is the persistent form: it opens a port and arms three `setInterval`
+schedulers (backups, closed elections, the notification queue). A serverless host has no process that
+outlives a response, so `vercel.json` deploys `client/` as a Vite service and `server/` as an Express
+service whose entrypoint is `server/api/index.js` — the same app, no `listen()`, no timers. The
+schedulers become two cron-called routes, `POST|GET /api/v1/jobs/tick` (every 5 minutes: queued
+notices, reminders, licence warnings, past-close elections) and `/api/v1/jobs/backups` (daily). They
+take no session and accept only `Authorization: Bearer $CRON_SECRET`; without that variable they answer
+503 rather than running unauthenticated.
 
 ---
 
@@ -165,7 +182,9 @@ factory applies the plan caps (`max_students`, `max_staff`, `max_storage_mb`) on
 | `resources` | CRUD factory mounted for every school-scoped module (academic years, classes, subjects, students, staff, attendance, examinations, finance, library, learning, transport, certificates…) |
 | `flows` | multi-step operations (results approval/publish, fee assignment, promotion, transfers, imports) |
 | `attendance`, `finance`, `examinations` | domain-specific endpoints used by the dashboards |
-| `school/notifications` | the inbox (`GET /`, `POST /read-all`, `POST /:id/read`, `GET /preferences`) plus the send operations behind it: `POST /preview`, `POST /send`, `GET /compose-options`, `GET /scheduled`, `POST /scheduled/:id/cancel`, `GET /batches/:batchId`, `GET /delivery-logs`, `GET /analytics` |
+| `school/notifications` | the inbox (`GET /`, `POST /read-all`, `POST /:id/read`, `GET /preferences`) plus the send operations behind it: `POST /preview`, `POST /send`, `GET /compose-options`, `GET /scheduled`, `POST /scheduled/:id/cancel`, `GET /batches/:batchId`, `GET /delivery-logs`, `GET /analytics`, and the acknowledgment pair `GET /pending-acks` / `POST /:id/ack` |
+| `account` | the caller's own devices: `POST /push-token` + `/push-token/remove` (FCM), `POST /push-subscription` + `/push-subscription/remove` (Web Push), `GET /push-public-key` (the VAPID key a browser needs to subscribe), `GET /push-status`, `POST /push-test` (staff only, throttled) |
+| `jobs` | the schedulers, for hosts without one: `GET`/`POST /tick` and `/backups`, bearer-protected by `CRON_SECRET` (§2.1) |
 
 List endpoints return `{ data, total, page, pageSize }`; errors return
 `{ error: { message, code?, details? } }`, and validation failures (422) carry
@@ -221,14 +240,25 @@ shows English text for those blocks; extending the two locale files is the remai
 
 ---
 
-## 8. Notifications, Firebase push and the PWA
+## 8. Notifications, device push and the PWA
 
 One written record, up to three copies of it: `in_app` (the row in `/school/notifications`),
-`push` (Firebase Cloud Messaging HTTP v1) and `email`. `server/src/services/notify.js` decides the
-channels from the recipient's own preferences; `server/src/services/fcm.js` is a zero-dependency
-sender that talks to Google straight from the service-account JSON.
+`push` and `email`. `server/src/services/notify.js` decides the channels from the recipient's own
+preferences.
 
-### 8.1 Server side
+`push` is one system with two transports, chosen per device by `server/src/services/pushDelivery.js`:
+
+| Transport | Reaches | Sender | Needs |
+| --- | --- | --- | --- |
+| FCM HTTP v1 | Chrome, Edge, Firefox and Samsung Internet on Android and desktop, when the app is installed | `server/src/services/fcm.js` (zero-dependency, talks to Google from the service-account JSON) | Firebase web config in `client/.env` |
+| Web Push (RFC 8291 + VAPID RFC 8292) | Safari on an iPhone or iPad **added to the Home Screen**, and any browser without Firebase | `server/src/services/webpush.js` (`web-push`) | a VAPID pair in `.env` (§8.1b) |
+
+A registration carries exactly one `PushManager` subscription, so a device is served by one transport
+— iOS tries Web Push first, everything else tries FCM and falls back. The payload Web Push sends is
+marked `provider: "webpush"`, and each half of `client/public/sw.js` only handles its own transport,
+which is what makes a second notification for the same message impossible.
+
+### 8.1a Server side: FCM
 
 1. Run `supabase/migrations/0024_notification_email.sql` and
    `supabase/migrations/0025_notification_ops.sql` in the Supabase SQL editor. 0025 adds the
@@ -241,9 +271,33 @@ sender that talks to Google straight from the service-account JSON.
    service-account JSON you downloaded from Firebase Console → Project settings → Service
    accounts. Keep the file outside the repository; the server reads it at send time and never
    logs its contents. `FIREBASE_PROJECT_ID` is optional — the project id inside the JSON is used
-   when it is blank.
+   when it is blank. On a host with no readable file, put the same JSON in
+   `FIREBASE_SERVICE_ACCOUNT_JSON` instead; it takes priority and is the only option that works
+   on Vercel (§2.1).
 3. Restart the API. `.env` is read once at boot, so `node --watch` reloading the code is not
    enough after you add the path.
+
+### 8.1b Server side: Web Push and the two migrations
+
+```bash
+npm run push:vapid -w server      # writes VAPID_PUBLIC_KEY / _PRIVATE_KEY / _SUBJECT into .env
+```
+
+The script prints only the public key, because the public key is handed to every browser that
+subscribes; the private half never leaves the file. Re-running it is a no-op on purpose: a rotated
+pair silently invalidates every subscription already registered, because the push services then
+answer 404 and each person's device goes quiet until they open the app again.
+
+Then run these two files in the Supabase SQL editor, in order:
+
+| Migration | Adds | Without it |
+| --- | --- | --- |
+| `0026_push_subscriptions.sql` | `provider`, `endpoint`, `p256dh`, `auth`, `label` on `push_tokens`; lifecycle columns `active`, `failure_count`, `last_error`, `revoked_at`; the unique `endpoint` the upsert needs; a partial index on live devices | the API still registers devices, but only over FCM, using the old column shape |
+| `0027_notification_acks.sql` | `ack_required` and `acknowledged_at` on `notifications`, plus the index the acknowledgment prompt reads | the composer's "must be acknowledged" checkbox has no effect and `/notifications/pending-acks` answers `ready: false` |
+
+Both are written so an un-migrated database keeps working: the first error mentioning a missing
+column downgrades that process's writes to the old shape instead of failing the send. Restart the
+API and rebuild the client (`npm run build -w client`) afterwards.
 
 ### 8.2 Client side
 
@@ -255,10 +309,35 @@ message is written — the anon key only ever reaches rows the database's own po
 read. Rebuild after editing: `npm run build -w client`.
 
 Push is per device and per opt-in: a signed-in person turns it on from the Account page
-(`push_tokens` stores the token against their school and user), and the browser must have granted
-the notification permission. On a phone or desktop the app is installable as a PWA; the service
-worker caches the app shell only, so a signed-out or stale API response is never served from
-cache.
+(`push_tokens` stores the subscription against their school and user), and the browser must have
+granted the notification permission. On a phone or desktop the app is installable as a PWA; the
+service worker caches the app shell only, so a signed-out or stale API response is never served
+from cache.
+
+The lifecycle rules that keep that list honest are worth knowing before debugging it:
+
+- **One row per browser, several browsers per person.** Each registration is stored under its own
+  credential; the newest 20 per account are kept and older ones are retired so a new phone always
+  fits.
+- **A denied permission is never re-asked.** `client/src/services/push.js` reads
+  `Notification.permission` first and refuses quietly if it is `denied`, so nobody is chased by a
+  prompt they already said no to.
+- **A refresh is an update, not a duplicate.** Chrome replaces a token that changes at runtime; the
+  same credential upserts onto itself instead of adding a row.
+- **Dead devices are retired, not deleted.** A 404/410 from a push service or `UNREGISTERED` from
+  FCM sets `active = false` and `revoked_at`, leaving the delivery history intact. Twelve consecutive
+  failures do the same. Deleting the row would orphan every log that names it.
+
+### 8.2b iOS and Android, in plain terms
+
+| Platform | What works | What to tell a user |
+| --- | --- | --- |
+| Android Chrome / Samsung Internet / Edge, installed as a PWA | FCM, so a message appears on the lock screen with the app closed | install the app, press *Enable on this device* |
+| Desktop Chrome / Edge / Firefox | FCM where configured, otherwise Web Push | same |
+| iPhone / iPad, Safari in a tab | **nothing** — iOS only delivers push to installed web apps | must go Share → **Add to Home Screen**, open the Home Screen icon once, then enable |
+| iPhone / iPad, added to the Home Screen (iOS 16.4+) | Web Push, and it needs the VAPID pair from §8.1b | the Account page says so when the device is not eligible |
+
+There is no way around the Home Screen requirement: it is an Apple limit, not an E-MADAARIS setting.
 
 ### 8.3 Who may send, and where to look for it
 
@@ -269,9 +348,9 @@ teachers and exam officers are limited to their own classes by the server. `noti
 | Screen | Route | What it does |
 | --- | --- | --- |
 | Inbox | `/school/notifications` | Filters by type, priority, date and text; opens the record a notice refers to; live feed when Supabase keys are set |
-| Composer | `/school/send-notice` | Pick roles, classes or people, preview the audience, send now or queue |
-| Delivery report | `/school/notification-report` | Writes, reads, per-channel outcomes, push rejection codes and one send's log via `?batch=` |
-| Account | `/account` | Push on/off for this device, password, language |
+| Composer | `/school/send-notice` | Pick roles, classes or people, preview the audience, send now or queue, require an acknowledgment |
+| Delivery report | `/school/notification-report` | Writes, reads, per-channel outcomes, push rejection codes, how many recipients acknowledged, and one send's log via `?batch=` |
+| Account | `/account` | Push on/off for this device, which transport it registered over, password, language |
 | School settings | `/school/settings` | "Automated notices": lesson reminders, lead minutes, assignment deadline lead, subscription alerts |
 
 `server/src/services/notificationScheduler.js` reads those four switches on its sweep. The lesson
@@ -279,26 +358,78 @@ clock is the school's own `timezone`, so a period is announced at the right minu
 even though the API runs in UTC. A school that never switched reminders on costs one query and
 nothing else.
 
+**Mandatory announcements.** The composer's *must be acknowledged* option (`ack_required`) is
+offered only when the in-app channel is on, and it means: the recipient's next visit to the app
+raises a modal that cannot be dismissed (`client/src/components/notifications/AcknowledgmentGate.jsx`)
+and only "I have read and understood" writes `acknowledged_at`. Being shown the message on a phone
+lock screen is *not* an acknowledgment — the delivery log and the acknowledgment column are separate
+facts, and a sender who has lost `notifications.send` before a queued notice is due cannot send it.
+
+**Tapping a notification** opens the app at `/notifications?open=<id>`, which marks that one row read
+and scrolls it into view. If nobody is signed in, `RequireAuth` remembers the exact URL, so the
+person lands on the message after signing in — and only their own copy is ever marked read.
+
 ### 8.4 When a push does not go out
 
 The composer's result and the delivery report show a skip reason instead of silence:
 
 | Reason | What it means |
 | --- | --- |
-| `sender_not_configured` | No service-account path on the server, or it failed to parse |
+| `sender_not_configured` | Neither transport is usable — no service-account path and no VAPID pair |
 | `no_registered_devices` | Those recipients have not pressed "Enable on this device" |
 | `sender_credentials_rejected` | Firebase refused the key — the JSON was replaced or revoked |
 | `token_lookup_failed` | The `push_tokens` read failed; the inbox rows were still written |
+| `missing_school_scope` | A school-scope send arrived with no school to scope it to; refused rather than broadcast to every tenant |
 | `push_threw` | The send itself raised; the message and the delivery log are unaffected |
 
 `UNREGISTERED` in the rejection-code table means that browser was uninstalled, cleared or
-re-registered; its token is dropped so the queue does not retry it forever.
+re-registered; its token is dropped so the queue does not retry it forever. A Web Push 404/410 from
+the push service means the same thing and retires the device the same way; a 5xx does not.
+
+Each send records what it did per transport, so `/account` and the delivery report can say *2 via
+FCM, 1 via Web Push* instead of a single number, and `GET /account/push-status` answers whether
+either transport is configured at all before a sender is asked to press *Send test*.
+
+### 8.5 What is proven, and what only a phone can prove
+
+Verified automatically against the running code (`server/src/api/push.routes.js`,
+`server/src/services/{pushDelivery,webpush,fcm,notify}.js`, `client/public/sw.js`):
+
+- **Wire format.** A simulated browser subscription (its own P-256 key pair and auth secret) and an
+  intercepted request showed the real thing leaving the server: an `aes128gcm` record that decrypts
+  to exactly the notification JSON, a sender key in the record header, and nothing readable in
+  transit without the subscription's keys.
+- **Authorization.** The VAPID assertion is a `vapid t=…, k=…` header whose JWT is ES256-signed by
+  the configured key, with `aud` set to that push service's origin, `sub` set to `VAPID_SUBJECT`,
+  and `exp` about twelve hours ahead.
+- **Priorities.** `urgent`/`high` → `Urgency: high`, `low` → `low`, unspecified → `normal`. The
+  library accepts only those four levels, so `urgent` maps to the loudest one it takes rather than
+  a value that would have failed the send.
+- **Refusals.** A browser-supplied endpoint must be `https` on the standard port and must resolve to
+  a public address: cloud-metadata, RFC-1918 and IPv6 loopback targets are rejected before any
+  lookup of the device table, and in production so is a loopback test service on a dev port.
+- **Tenancy.** Both recipient fields come from the verified session, never the body; a school-scope
+  send without a school fails closed; routes are mounted behind authentication (anonymous and forged
+  tokens both reach the auth layer).
+- **Degradation.** With migrations 0026/0027 not yet applied, devices still register over the old
+  column shape, `pending-acks` answers `ready: false`, and the ack prompt stays out of the way
+  instead of raising a 500.
+
+Not proven here, and it would be dishonest to call it working until someone does it:
+
+1. **A message on a real lock screen.** Nothing in this repository can make that claim. Run §9's
+   checks 1–4 and 13–16 on an Android phone and an iPhone added to the Home Screen.
+2. **Apple's path end to end**, which additionally needs `VAPID_*` (§8.1b) and HTTPS with a
+   certificate a phone trusts — `localhost` over plain http is not enough on iOS.
+3. **iOS 16.4+ only.** An older iPhone cannot receive web push at all, in any product.
 
 ---
 
 ## 9. Testing the notification stack
 
-Twelve checks, in the order that builds on itself. Two of them (11 and 12) need a second browser.
+Sixteen checks, in the order that builds on itself. Two of them (11 and 12) need a second browser;
+13–16 need real phones, and they are the only ones that can answer the question the whole feature
+exists for — does the message reach the device before the app is opened.
 
 1. Signed-in school admin → Account → *Enable on this device*; `push_tokens` gains a row for that
    user and school, and the card says "Enabled on this device".
@@ -323,6 +454,42 @@ Twelve checks, in the order that builds on itself. Two of them (11 and 12) need 
 12. Delivery report as a role without `notifications.export` answers the permission state, not
     somebody else's recipient list; as principal, `?batch=<id>` isolates one send's per-channel
     outcomes.
+13. **Android, app closed.** Install the PWA in Chrome, enable push, then send a notice to that
+    person and lock the phone. The message must be readable on the lock screen without opening
+    E-MADAARIS. Unlock and tap it: the app opens on that message and only that message becomes read.
+14. **iPhone, added to the Home Screen** (iOS 16.4+, after §8.1b). Same as 13. In Safari a plain tab
+    is expected to *not* receive anything — that is Apple's limit, recorded in §8.2b rather than
+    hidden.
+15. **No double notification.** With the app open in the foreground, send a notice: exactly one
+    alert appears, the bell count rises by one, and the inbox shows the row once. Repeat with the
+    tab closed and reopened.
+16. **Acknowledgment is a person's act.** Send with *must be acknowledged* on, see it on the lock
+    screen, and confirm the phone alone has not acknowledged it. Sign in on that device: the modal
+    appears, cannot be dismissed, and only "I have read and understood" moves the delivery report's
+    acknowledged count.
+
+### 9.1 The standing automated checks
+
+Five scratch probes cover what a machine can prove without a phone — the SSRF refusals in both
+development and production mode, route mounting and authentication, the fan-out's tenancy rules, the
+encrypted wire format with its VAPID assertion, and the behaviour of every new route against a
+database that has not run 0026/0027 yet:
+
+```bash
+cd server
+NODE_ENV=development node tmp-push-verify/probe-guard.mjs
+NODE_ENV=production  node tmp-push-verify/probe-guard.mjs
+node tmp-push-verify/probe-routes.mjs     # boots the real app on a spare port
+node tmp-push-verify/probe-send.mjs
+node tmp-push-verify/probe-wire.mjs
+node tmp-push-verify/probe-degrade.mjs
+```
+
+They read nothing they should not and write nothing at all: two of them deliberately blank
+`SUPABASE_URL` in their own process so a request can never reach the live database, and the wire
+probe keeps its throwaway VAPID pair in memory instead of writing to `.env`. The directory is
+gitignored (`server/tmp-*`), so these stay local verification rather than committed test fixtures —
+delete it freely, it is described here so it can be rebuilt.
 
 ---
 
@@ -350,7 +517,8 @@ Twelve checks, in the order that builds on itself. Two of them (11 and 12) need 
   set; database-backed routes will answer 503 until they are.
 - **Login returns 503 `Server not configured`** — same cause; finish §2 first.
 - **Push says `sender_not_configured`** — `FIREBASE_SERVICE_ACCOUNT_PATH` is blank, points at a
-  file the server cannot read, or was set after the last boot. `.env` is read once at start.
+  file the server cannot read (always the case on Vercel — use `FIREBASE_SERVICE_ACCOUNT_JSON`),
+  or was set after the last boot. `.env` is read once at start.
 - **The bell does not fill by itself** — `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` are unset
   (expected: the inbox refreshes on load instead), or the client bundle predates them — rebuild.
 - **Priority filter is greyed out, or Automated notices says it needs migration 0025** — that
