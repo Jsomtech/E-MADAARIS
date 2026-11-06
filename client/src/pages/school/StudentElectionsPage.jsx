@@ -84,9 +84,9 @@ export default function StudentElectionsPage() {
     setSealed(null);
   }, [election?.id]);
 
-  /** Live counts move without a refresh, the same way the officer's screen does. */
+  /** Live counts move without a refresh, and a scheduled election flips to open on its own. */
   useEffect(() => {
-    if (!election || election.status !== 'active') return undefined;
+    if (!election || !['active', 'scheduled'].includes(election.status)) return undefined;
     const timer = setInterval(() => view.refetch(), 30_000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,7 +94,10 @@ export default function StudentElectionsPage() {
 
   const isOpen = election?.status === 'active' && new Date(election.start_at) <= new Date(now) && new Date(election.end_at) > new Date(now);
   const hasVoted = Boolean(myBallot?.has_voted);
-  const canVote = Boolean(isOpen && !hasVoted);
+  // The school's voter list is the last word on who may cast a ballot, so the screen follows it
+  // rather than letting a learner build a ballot the server will refuse.
+  const onVoterList = data.eligibility ? data.eligibility.on_voter_list !== false : true;
+  const canVote = Boolean(isOpen && !hasVoted && onVoterList);
   const ended = Boolean(election && (election.status === 'closed' || election.status === 'cancelled'
     || (election.status === 'active' && new Date(election.end_at) <= new Date(now))));
 
@@ -177,7 +180,7 @@ export default function StudentElectionsPage() {
         <div className="d-flex flex-wrap gap-2 align-items-center mb-2">
           <Badge tone={statusTone}>{election.status}</Badge>
           {isOpen && <Badge tone="ok"><Clock3 size={11} /> {t('elections.closesIn', { defaultValue: 'closes in' })} {humanGap(untilClose)}</Badge>}
-          {election.status === 'scheduled' && untilOpen > 0 && (
+          {!isOpen && !ended && untilOpen > 0 && (
             <Badge tone="info"><Clock3 size={11} /> {t('elections.opensIn', { defaultValue: 'opens in' })} {humanGap(untilOpen)}</Badge>
           )}
           {hasVoted && <Badge tone="brand"><Lock size={11} /> {t('elections.yourVoteIn', { defaultValue: 'your ballot is sealed' })}</Badge>}
@@ -207,6 +210,33 @@ export default function StudentElectionsPage() {
           <div>
             <div className="fw-semibold">{t('elections.cancelledLearner', { defaultValue: 'This election was cancelled' })}</div>
             <div>{election.cancel_reason || t('elections.cancelledNoReason', { defaultValue: 'The school did not publish a reason.' })}</div>
+          </div>
+        </div>
+      )}
+
+      {!isOpen && !ended && untilOpen > 0 && (
+        <div className="alert alert-info small d-flex gap-2 align-items-start">
+          <Clock3 size={16} className="flex-shrink-0 mt-1" />
+          <div>
+            <div className="fw-semibold">
+              {t('elections.opensInTitle', { defaultValue: 'The ballot opens in {{gap}}', gap: humanGap(untilOpen) })}
+            </div>
+            <div>
+              {t('elections.notYetLearner', {
+                defaultValue: 'Read the candidates now. Choose your picks when the ballot opens at {{open}}, and this page unlocks on its own — you do not have to reload.',
+                open: dateTime(election.start_at),
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!onVoterList && (
+        <div className="alert alert-warning small d-flex gap-2 align-items-start">
+          <Ban size={16} className="flex-shrink-0 mt-1" />
+          <div>
+            <div className="fw-semibold">{t('elections.notOnRollTitle', { defaultValue: 'Your name is not on the voter list for this election' })}</div>
+            <div>{t('elections.notOnRoll', { defaultValue: 'The school can only accept a ballot from a learner whose enrolment is active in this school. Tell an administrator so your record can be checked — the candidates above stay readable to you either way.' })}</div>
           </div>
         </div>
       )}
@@ -244,7 +274,10 @@ export default function StudentElectionsPage() {
           {byPosition.map(({ position, rows }) => (
             <div key={position.id} className="mb-4">
               <div className="elections-position-heading">
-                {String(position.position_name || '').toUpperCase()} CANDIDATES
+                {t('elections.positionCandidates', {
+                  defaultValue: '{{position}} candidates',
+                  position: position.position_name || t('elections.seatFallback', { defaultValue: 'this seat' }),
+                })}
               </div>
               {rows.length === 0 ? (
                 <div className="small text-muted mb-2">{t('elections.noStanding', { defaultValue: 'No one is standing for this seat yet.' })}</div>
@@ -254,7 +287,6 @@ export default function StudentElectionsPage() {
                     <CandidateCard
                       key={row.id}
                       row={row}
-                      position={position}
                       selectable={canVote}
                       selected={selected[position.id] === row.id}
                       onSelect={() => setSelected((current) => ({ ...current, [position.id]: row.id }))}
@@ -377,8 +409,8 @@ export default function StudentElectionsPage() {
   );
 }
 
-function CandidateCard({ row, position, selectable, selected, onSelect, onProfile, votes, showVotes, t }) {
-  const shortIntro = String(row.introduction || '').slice(0, 150);
+function CandidateCard({ row, selectable, selected, onSelect, onProfile, votes, showVotes, t }) {
+  const shortIntro = String(row.introduction || '').slice(0, 120);
   return (
     <div className={`candidate-card ${selected ? 'is-selected' : ''}`} role={selectable ? 'button' : undefined} tabIndex={selectable ? 0 : -1}
       onKeyDown={(e) => { if (selectable && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onSelect(); } }}
@@ -392,7 +424,6 @@ function CandidateCard({ row, position, selectable, selected, onSelect, onProfil
           <div className="small text-muted">
             {[row.class_name, row.gender].filter(Boolean).join(' · ') || t('elections.classUnknown', { defaultValue: 'class not recorded' })}
           </div>
-          <div className="small text-muted">{position.position_name}</div>
         </div>
         {selectable && (
           <span className={`elections-radio ${selected ? 'is-on' : ''}`} aria-hidden="true">
@@ -406,12 +437,12 @@ function CandidateCard({ row, position, selectable, selected, onSelect, onProfil
           <Megaphone size={13} /> {row.campaign_title}
         </div>
       )}
-      {shortIntro && <div className="small text-muted mt-2 elections-clamp">{shortIntro}{String(row.introduction || '').length > 150 ? '…' : ''}</div>}
+      {shortIntro && <div className="small text-muted mt-2 elections-clamp">{shortIntro}{String(row.introduction || '').length > 120 ? '…' : ''}</div>}
 
       {(row.manifestos || []).length > 0 && (
         <ul className="elections-manifesto mt-2">
-          {row.manifestos.slice(0, 3).map((point, index) => <li key={index}>{point}</li>)}
-          {row.manifestos.length > 3 && <li className="text-muted">{t('elections.morePromises', { defaultValue: '+{{n}} more in the full profile', n: row.manifestos.length - 3 })}</li>}
+          {row.manifestos.slice(0, 2).map((point, index) => <li key={index}>{point}</li>)}
+          {row.manifestos.length > 2 && <li className="text-muted">{t('elections.morePromises', { defaultValue: '+{{n}} more in the full profile', n: row.manifestos.length - 2 })}</li>}
         </ul>
       )}
 

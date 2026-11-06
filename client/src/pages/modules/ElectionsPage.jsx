@@ -754,6 +754,10 @@ function DecisionModal({ state, onClose, onSaved, positions, t }) {
 function ScheduleTab({ election, canManage, canEdit, busy, onEdit, onStatus, onCancel, onPublish, t }) {
   if (!election) return <Spinner />;
   const status = election.status;
+  // "active" is only half the story: the ballot itself is gated on the window in the database, so an
+  // election can read as open to the school while learners are still told to wait.
+  const notStartedYet = status === 'active' && new Date(election.start_at) > new Date();
+  const pastClose = (status === 'active' || status === 'paused') && new Date(election.end_at) <= new Date();
   const button = (action, label, Icon, tone, enabled) => (
     <button type="button" className={`btn btn-sm btn-outline-${tone} d-inline-flex align-items-center gap-1`} disabled={!enabled || busy} onClick={() => onStatus(action)}>
       <Icon size={14} /> {label}
@@ -761,6 +765,27 @@ function ScheduleTab({ election, canManage, canEdit, busy, onEdit, onStatus, onC
   );
   return (
     <>
+      {canManage && notStartedYet && (
+        <div className="alert alert-warning small d-flex gap-2 align-items-start">
+          <Timer size={16} className="flex-shrink-0 mt-1" />
+          <div>
+            <div className="fw-semibold">{t('elections.activeButWaiting', { defaultValue: 'Marked open, but the window has not started' })}</div>
+            <div>
+              {t('elections.activeButWaitingHint', {
+                defaultValue: 'Learners see the candidates but cannot cast a ballot until {{open}}. "Open voting now" starts the ballot immediately and moves the opening time to right now.',
+                open: dateTime(election.start_at),
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+      {canManage && pastClose && (
+        <div className="alert alert-warning small d-flex gap-2 align-items-start">
+          <Timer size={16} className="flex-shrink-0 mt-1" />
+          <div>{t('elections.windowPassed', { defaultValue: 'The closing time has passed. Change the dates and times before opening voting again.' })}</div>
+        </div>
+      )}
+
       <Section title={t('elections.window', { defaultValue: 'Voting window' })}
         subtitle={t('elections.windowHint', { defaultValue: 'The database clock opens and closes this on its own — nobody has to be signed in when it happens.' })}
         actions={canEdit && <button type="button" className="btn btn-sm btn-outline-primary" onClick={onEdit}>{t('elections.changeTimes', { defaultValue: 'Change dates and times' })}</button>}>
@@ -780,7 +805,7 @@ function ScheduleTab({ election, canManage, canEdit, busy, onEdit, onStatus, onC
         <Section title={t('elections.manualControl', { defaultValue: 'Manual control' })}
           subtitle={t('elections.manualHint', { defaultValue: 'Every button here is audited. Leaving it alone is fine — the clock does the same thing on time.' })}>
           <div className="d-flex flex-wrap gap-2">
-            {button('open', t('elections.openNow', { defaultValue: 'Open voting now' }), Play, 'success', ['scheduled', 'paused'].includes(status))}
+            {button('open', t('elections.openNow', { defaultValue: 'Open voting now' }), Play, 'success', ['scheduled', 'paused'].includes(status) || notStartedYet)}
             {button('pause', t('elections.pause', { defaultValue: 'Pause' }), Pause, 'warning', status === 'active')}
             {button('resume', t('elections.resume', { defaultValue: 'Resume' }), Play, 'success', status === 'paused')}
             {button('close', t('elections.closeNow', { defaultValue: 'Close and tally' }), Flag, 'danger', ['scheduled', 'active', 'paused'].includes(status))}
@@ -916,6 +941,11 @@ function ElectionFormModal({ state, onClose, onSaved, t }) {
         <div className="col-12 col-md-4">
           <label className="form-label small fw-semibold">{t('elections.opens', { defaultValue: 'Opens' })}</label>
           <input type="datetime-local" className="form-control form-control-sm" value={values.start_at} onChange={set('start_at')} />
+          <div className="small text-muted mt-1">
+            {values.start_at && new Date(values.start_at) > new Date()
+              ? t('elections.opensLaterHint', { defaultValue: 'Learners cannot vote until this moment. To start immediately instead, use "Open voting now" after saving.' })
+              : t('elections.opensNowHint', { defaultValue: 'Ballots are accepted from this moment until the closing time.' })}
+          </div>
         </div>
         <div className="col-12 col-md-4">
           <label className="form-label small fw-semibold">{t('elections.closes', { defaultValue: 'Closes' })}</label>

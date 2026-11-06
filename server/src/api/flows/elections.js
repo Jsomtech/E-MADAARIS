@@ -188,9 +188,14 @@ electionsRouter.get('/current', requirePermission('elections.view'), async (req,
 
     // A learner's own participation — never anyone else's.
     let myBallot = null;
+    let eligibility = null;
     if (isPortalOnly(req.auth) || req.auth.roles?.includes('student')) {
-      const { data: mine } = await supabase.from('students').select('id').eq('school_id', schoolId).eq('user_id', req.auth.userId).limit(1);
+      const { data: mine } = await supabase.from('students').select('id, status').eq('school_id', schoolId).eq('user_id', req.auth.userId).limit(1);
       const studentId = mine?.[0]?.id;
+      // The ballot RPC refuses an account that is not an active enrolment. Saying so here, before a
+      // learner fills in a ballot they cannot submit, is the difference between a locked screen and
+      // a silent one.
+      eligibility = { is_learner: true, on_voter_list: Boolean(studentId) && mine[0].status === 'active' };
       if (studentId) {
         const { data: part } = await supabase.from('election_voter_participation')
           .select('submitted_at').eq('election_id', election.id).eq('student_id', studentId).maybeSingle();
@@ -226,6 +231,7 @@ electionsRouter.get('/current', requirePermission('elections.view'), async (req,
           };
         }),
         my_ballot: myBallot,
+        eligibility,
         turnout: { eligible: turnout.eligible, voted: turnout.voted, not_voted: turnout.not_voted, percentage: turnout.percentage },
         results: showRankings
           // A learner's scoreboard lists the same people the ballot lists: an application that was
@@ -355,13 +361,18 @@ electionsRouter.patch('/:id', requirePermission('elections.edit'), async (req, r
 
 // --- Manual controls over the window -----------------------------------------------------------
 
+// 'open' also accepts 'active' on purpose: an election can be active while its start_at still sits
+// in the future (the create form defaults it to tomorrow). The officer asked for voting now, so the
+// route must be able to repair that row rather than refuse to touch it.
 const TRANSITIONS = {
-  open: { from: ['scheduled', 'paused'], to: 'active' },
+  open: { from: ['scheduled', 'paused', 'active'], to: 'active' },
   pause: { from: ['active'], to: 'paused' },
   resume: { from: ['paused'], to: 'active' },
   close: { from: ['scheduled', 'active', 'paused'], to: 'closed' },
   cancel: { from: ['scheduled', 'active', 'paused'], to: 'cancelled' },
 };
+
+const PARTICIPLES = { open: 'opened', pause: 'paused', resume: 'resumed', close: 'closed', cancel: 'cancelled' };
 
 electionsRouter.post('/:id/status', requirePermission('elections.manage'), async (req, res, next) => {
   try {
@@ -374,19 +385,27 @@ electionsRouter.post('/:id/status', requirePermission('elections.manage'), async
     const schoolId = req.auth.schoolId;
     const { election, positions } = await loadScoped(supabase, schoolId, req.params.id);
     const rule = TRANSITIONS[body.action];
+    const participle = PARTICIPLES[body.action];
     if (!rule.from.includes(election.status)) {
-      throw new ApiError(409, `An election that is ${election.status} cannot be ${body.action === 'cancel' ? 'cancelled' : `${body.action}ed`}.`);
+      throw new ApiError(409, `An election that is ${election.status} cannot be ${participle}.`);
     }
     if (body.action === 'cancel' && (body.reason || '').length < 3) {
       throw new ApiError(422, 'Say why the election is being cancelled.');
     }
-    if (body.action === 'resume' && new Date(election.end_at) <= new Date()) {
-      throw new ApiError(422, 'The closing time has already passed; close the election instead of resuming it.');
-    }
 
+    const now = new Date();
     const patch = { status: rule.to };
-    if (body.action === 'open') patch.opened_at = election.opened_at || new Date().toISOString();
-    if (body.action === 'close') patch.closed_at = election.closed_at || new Date().toISOString();
+    if (body.action === 'open' || body.action === 'resume') {
+      // The ballot is enforced by the window in the database, not by this status column. Releasing
+      // an election whose closing time has passed, or whose opening time is still ahead, would send
+      // a "Voting is open" notification for a ballot the learner then cannot cast.
+      if (new Date(election.end_at) <= now) {
+        throw new ApiError(422, 'The closing time has already passed. Extend the window on the election first, then open voting again.');
+      }
+      if (new Date(election.start_at) > now) patch.start_at = now.toISOString();
+      if (body.action === 'open') patch.opened_at = election.opened_at || now.toISOString();
+    }
+    if (body.action === 'close') patch.closed_at = election.closed_at || now.toISOString();
     if (body.action === 'cancel') patch.cancel_reason = body.reason;
     const { data, error } = await supabase.from('elections').update(patch)
       .eq('id', election.id).eq('school_id', schoolId)
@@ -406,7 +425,9 @@ electionsRouter.post('/:id/status', requirePermission('elections.manage'), async
     }
     await audit(req, {
       module: 'elections', action: `election_${body.action}`, recordId: election.id,
-      summary: `Election ${election.title} manually ${body.action === 'cancel' ? 'cancelled' : `${body.action}ed`}`,
+      summary: patch.start_at
+        ? `Election ${election.title} manually ${participle} (voting window pulled forward to now)`
+        : `Election ${election.title} manually ${participle}`,
       metadata: body.reason ? { reason: body.reason } : {},
     });
     res.json({ data });
